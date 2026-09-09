@@ -270,3 +270,4 @@ tfplan
 !backend/employee-directory/schema.sql
 !backend/employee-directory/seed.sql
 !backend/employee-directory/README.md
+!backend/employee-directory/smoke_test.py

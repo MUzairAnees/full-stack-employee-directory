@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Card, CardContent, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Button, Card, CardContent, CircularProgress, Stack, TextField, Typography } from '@mui/material';
 import { getMe, login } from '../services/api';
 import { useCurrentUser } from '../context/CurrentUserContext';
 
@@ -55,7 +55,13 @@ function Login() {
               required
               fullWidth
             />
-            <Button type="submit" variant="contained" disabled={submitting} fullWidth>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={submitting}
+              fullWidth
+              startIcon={submitting ? <CircularProgress size={16} color="inherit" /> : null}
+            >
               {submitting ? 'Signing in...' : 'Sign in'}
             </Button>
           </Stack>

@@ -11,19 +11,20 @@ current_user rejects every broken-token shape:
   6. tampered/expired token -> 401
 """
 
-import bcrypt
 import jwt
 from fastapi.testclient import TestClient
 
-import app.repositories.db as db
 from app.main import app
-from app.services.auth_service import _BCRYPT_ROUNDS, _JWT_ALGORITHM, _JWT_SECRET
+from app.services.auth_service import _JWT_ALGORITHM, _JWT_SECRET
 
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
 _CEO_PASSWORD = "Password123!"
-_TEST_PASSWORD = "test-password-123"
+# Same permanently-seeded account seed.sql defines, so this test needs no
+# database writes of its own and this password works against AWS too.
+_DEACTIVATED_EMAIL = "deactivated@example.com"
+_DEACTIVATED_PASSWORD = "Password123!"
 
 
 def test_login_succeeds_with_correct_credentials() -> None:
@@ -50,25 +51,12 @@ def test_login_unknown_email_returns_401_identical_to_wrong_password() -> None:
 
 def test_login_deactivated_employee_returns_401_even_with_correct_password() -> None:
     """A deactivated account must be rejected even with the right
-    password. ON CONFLICT DO UPDATE (not DO NOTHING) so this stays
-    correct across repeated test runs even if _TEST_PASSWORD ever changes.
+    password. Uses the permanently-seeded deactivated demo account
+    (seed.sql) rather than inserting one — that account also needs to
+    exist against AWS for smoke_test.py, so it's seeded once, not
+    created ad hoc by this test.
     """
-    conn = db.get_connection()
-    password_hash = bcrypt.hashpw(_TEST_PASSWORD.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO employees (first_name, last_name, email, password_hash, role,
-                work_location_id, expertise_id, is_active)
-            VALUES ('Test', 'Deactivated', 'deactivated@example.com', %s, 'EMPLOYEE',
-                (SELECT id FROM work_locations WHERE name = 'Remote'),
-                (SELECT id FROM expertise WHERE name = 'Backend'), false)
-            ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = false
-            """,
-            (password_hash,),
-        )
-
-    response = client.post("/login", json={"email": "deactivated@example.com", "password": _TEST_PASSWORD})
+    response = client.post("/login", json={"email": _DEACTIVATED_EMAIL, "password": _DEACTIVATED_PASSWORD})
     assert response.status_code == 401
 
 

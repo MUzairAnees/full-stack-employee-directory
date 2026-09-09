@@ -10,8 +10,11 @@ from app.models.employee import Employee
 from app.repositories import employee_repository as repo
 
 # Workshop-scope shortcut: a hardcoded fallback secret. Never commit a
-# real one. Production would pull this from Secrets Manager; that's an
-# infra/ change, out of scope here (see README).
+# real one. Confirmed with the workshop: infra/ is off-limits entirely
+# (locals.tf's env_vars map has no slot for a custom secret and can't
+# gain one), so this is a settled constraint, not a pending decision —
+# see README. Production would pull this from Secrets Manager or
+# Parameter Store instead.
 _JWT_SECRET = os.environ.get("JWT_SECRET", "dev-placeholder-not-a-real-secret")
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TTL_SECONDS = 8 * 60 * 60  # 8h; no refresh flow this slice (known gap)
@@ -19,7 +22,13 @@ _TOKEN_TTL_SECONDS = 8 * 60 * 60  # 8h; no refresh flow this slice (known gap)
 # Same cost factor seed.sql's bootstrap hashes were generated with. Both
 # a real check and the dummy check below always cost the same because
 # they share this one constant, not by coincidence.
-_BCRYPT_ROUNDS = 12
+#
+# Was 12; reduced to 10 (see README) — confirmed with the workshop that
+# infra/ is off-limits, so the provided Lambda's memory_size=128 (and the
+# CPU that comes with it) is fixed. Cost 12 measured ~4.5s per login on
+# that CPU allocation; cost 10 is still at the OWASP-recommended floor
+# and is a one-line change back up if more memory ever becomes available.
+_BCRYPT_ROUNDS = 10
 
 # Precomputed once at import, not per-request: an unknown email must
 # still pay for exactly one bcrypt.checkpw() against a hash of the same

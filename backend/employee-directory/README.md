@@ -109,14 +109,43 @@ all worth recording so they aren't rediscovered from scratch:
    origin request policy already forwards every viewer header except
    `Host`.
 
+## infra/ confirmed off-limits: two settled constraints
+
+Both of these were originally flagged as open questions pending a decision
+on whether `infra/` could be touched. Confirmed with the workshop:
+`infra/` is off-limits entirely. Both are now closed, not pending:
+
+- **bcrypt cost factor is 10, not 12.** The provided Lambda is 128MB
+  (`infra/lambda.tf`'s `memory_size = 128`), and AWS Lambda scales CPU
+  allocation with memory — at 128MB there's very little CPU, and bcrypt is
+  deliberately CPU-heavy. Cost 12 measured ~4.5s per login on this
+  hardware (confirmed via CloudWatch — every sample was a warm
+  invocation, not a cold start; it was really bcrypt). Asked whether
+  `memory_size` could be raised instead; `infra/` cannot be modified, so
+  the cost factor was lowered instead: still ~1.1s on this hardware, and
+  still at the [OWASP-recommended floor](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+  for bcrypt. `app/services/auth_service.py`'s `_BCRYPT_ROUNDS` is the
+  one place this lives; raising it back to 12 (or higher) is a one-line
+  change if more Lambda memory ever becomes available.
+- **The JWT signing secret is a documented placeholder, permanently.**
+  `infra/locals.tf`'s `env_vars` map has no slot for a custom secret, and
+  since `infra/` cannot be modified, there is no way to inject a real one
+  via Terraform. `app/services/auth_service.py` falls back to a hardcoded
+  constant (`dev-placeholder-not-a-real-secret`) for both local and AWS.
+  This is a workshop-scope shortcut, not a real secret — never commit an
+  actual production secret here. In production this would come from
+  Secrets Manager or Parameter Store, injected as a real environment
+  variable, not hardcoded.
+
 ## Demo credentials (bootstrap accounts)
 
 `seed.sql` stores password hashes, not plaintext, so the plaintext has to
-be written down somewhere for the demo to actually be usable. Both
+be written down somewhere for the demo to actually be usable. All three
 accounts share one password for simplicity. These are **demo accounts
 only**, not real credentials:
 
-| Role  | Email | Password |
-| ----- | ----- | -------- |
-| CEO   | `ceo@example.com` | `Password123!` |
-| Admin | `admin@example.com` | `Password123!` |
+| Role  | Email | Password | Notes |
+| ----- | ----- | -------- | ----- |
+| CEO   | `ceo@example.com` | `Password123!` | |
+| Admin | `admin@example.com` | `Password123!` | |
+| Employee | `deactivated@example.com` | `Password123!` | `is_active = false` on purpose — login always fails. Exists so "deactivated account can't log in" is testable against a real seeded row on both local and AWS, not just a local-only test fixture. |
