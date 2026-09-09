@@ -244,6 +244,17 @@ frontend/node_modules/
 !frontend/package.json
 !frontend/README.md
 
+# start-dev.sh vendors pip packages directly into each backend service
+# directory for LocalStack hot-reload (pip install --target=<service_dir>).
+# Ignore everything pip drops there, then allow back in only our own source.
+backend/employee-directory/*
+!backend/employee-directory/app/
+!backend/employee-directory/tests/
+!backend/employee-directory/function.py
+!backend/employee-directory/requirements.txt
+!backend/employee-directory/requirements-dev.txt
+!backend/employee-directory/pytest.ini
+
 # Terraform plan files
 tfplan
 *.tfplan
