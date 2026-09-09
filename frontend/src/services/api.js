@@ -284,3 +284,18 @@ export async function listWorkLocations() {
   }
   return response.json();
 }
+
+/**
+ * Lists departments. Requires authentication (unlike work locations) —
+ * goes through authFetch, so an expired/invalid token here triggers the
+ * same session-expiry handling as any other authenticated call.
+ *
+ * @returns {Promise<Array<{id: number, name: string, is_active: boolean}>>}
+ */
+export async function listDepartments() {
+  const response = await authFetch('/departments');
+  if (!response.ok) {
+    throw classifyError(response);
+  }
+  return response.json();
+}

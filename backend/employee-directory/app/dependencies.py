@@ -1,9 +1,12 @@
 """Shared FastAPI dependencies."""
 
+from collections.abc import Callable
+
 import jwt
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from app.models.employee import Employee
+from app.models.role import Role
 from app.repositories import employee_repository as repo
 from app.services.auth_service import decode_token
 
@@ -42,3 +45,24 @@ def current_user(authorization: str | None = Header(default=None)) -> Employee:
         raise HTTPException(status_code=401, detail="not authenticated")
 
     return employee
+
+
+def require_role(*roles: Role) -> Callable[[Employee], Employee]:
+    """Builds a dependency requiring the current user to have one of the
+    given roles. Wraps current_user rather than duplicating it, so
+    FastAPI resolves that first: no/bad token -> 401 before role is ever
+    checked; a valid token with the wrong role -> 403.
+
+    Args:
+        *roles: The roles allowed to proceed.
+
+    Returns:
+        A dependency callable for use with Depends(require_role(...)).
+    """
+
+    def dependency(employee: Employee = Depends(current_user)) -> Employee:
+        if employee.role not in roles:
+            raise HTTPException(status_code=403, detail="you don't have permission")
+        return employee
+
+    return dependency

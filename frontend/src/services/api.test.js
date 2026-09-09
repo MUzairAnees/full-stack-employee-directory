@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getHealth, apiFetch } from './api';
+import { getHealth, apiFetch, authFetch, getToken, onSessionExpired } from './api';
 
 describe('getHealth', () => {
   beforeEach(() => {
@@ -84,5 +84,35 @@ describe('apiFetch (CloudFront 404 backstop, for FastAPI\'s own unmatched-route 
     await expect(response.json()).resolves.toEqual({
       detail: 'work location 999999 not found',
     });
+  });
+});
+
+describe('authFetch (session-expiry interceptor)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    localStorage.clear();
+  });
+
+  it('clears the token and notifies subscribers on a 401 from an authenticated call', async () => {
+    // departments is the first real caller of authFetch beyond login
+    // itself, so this is the first time an expired/invalid token
+    // mid-session is actually reachable — confirming the mechanism
+    // works, not just re-reading the code that implements it.
+    localStorage.setItem('employee-directory-token', 'some-token');
+    fetch.mockResolvedValueOnce({
+      status: 401,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ detail: 'not authenticated' }),
+    });
+
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    await expect(authFetch('/departments')).rejects.toThrow('Your session ended - sign in again');
+
+    expect(getToken()).toBeNull();
+    expect(listener).toHaveBeenCalledOnce();
+
+    unsubscribe();
   });
 });

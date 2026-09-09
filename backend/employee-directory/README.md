@@ -20,6 +20,15 @@ In a production setting, schema migration would be a CI/CD step run
 against the database directly (e.g. via a bastion or a migration job with
 network access to the VPC), not something the application does at startup.
 
+**Heads-up for adding columns/constraints to an existing table** (not
+needed as of slice 3): `CREATE TABLE IF NOT EXISTS` is a silent no-op on
+any database that's already run it — Aurora has every table already.
+Editing a `CREATE TABLE` statement in place does nothing there. Growing
+an existing table needs its own idempotent statement alongside the
+create, e.g. `ALTER TABLE employees ADD COLUMN IF NOT EXISTS ... ;` —
+otherwise the symptom is "the column isn't there but the code looks
+fine," discovered the hard way instead of read here first.
+
 ## Aurora cold start (connect_timeout)
 
 `infra/rds.tf` sets `min_capacity = 0.0` on the Aurora Serverless v2

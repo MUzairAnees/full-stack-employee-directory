@@ -3,14 +3,15 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.controllers import auth, expertise, work_locations
-from app.exceptions import NotFoundError
+from app.controllers import auth, departments, expertise, work_locations
+from app.exceptions import DependentsExistError, DuplicateError, NotFoundError
 
 app = FastAPI(title="Employee Directory")
 
 app.include_router(auth.router)
 app.include_router(work_locations.router)
 app.include_router(expertise.router)
+app.include_router(departments.router)
 
 
 @app.exception_handler(NotFoundError)
@@ -29,6 +30,20 @@ async def not_found_error_handler(request: Request, exc: NotFoundError) -> JSONR
     frontend/src/services/api.js's apiFetch for how that case is handled.
     """
     return JSONResponse(status_code=410, content={"detail": str(exc)})
+
+
+@app.exception_handler(DuplicateError)
+async def duplicate_error_handler(request: Request, exc: DuplicateError) -> JSONResponse:
+    """Maps a uniqueness-constraint violation to 409, in one place —
+    same pattern as NotFoundError above.
+    """
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(DependentsExistError)
+async def dependents_exist_error_handler(request: Request, exc: DependentsExistError) -> JSONResponse:
+    """Maps a delete blocked by active dependents to 409, in one place."""
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.get("/health")

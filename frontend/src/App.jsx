@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AppBar, Box, Button, CircularProgress, Toolbar, Typography } from '@mui/material';
 import { getHealth } from './services/api';
 import WorkLocations from './pages/WorkLocations';
+import Departments from './pages/Departments';
 import Login from './pages/Login';
 import { useCurrentUser } from './context/CurrentUserContext';
 
@@ -47,6 +48,10 @@ function App() {
           Work Locations
         </Typography>
         <WorkLocations />
+        <Typography variant="h5" component="h1" sx={{ mt: 2 }}>
+          Departments
+        </Typography>
+        <Departments />
       </Box>
     </>
   );
