@@ -104,10 +104,17 @@ def test_rename_to_an_existing_name_returns_409() -> None:
     name_a = _unique_name()
     name_b = _unique_name()
     id_a = client.post("/departments", json={"name": name_a}, headers=headers).json()["id"]
-    client.post("/departments", json={"name": name_b}, headers=headers)
+    id_b = client.post("/departments", json={"name": name_b}, headers=headers).json()["id"]
 
     response = client.put(f"/departments/{id_a}", json={"name": name_b}, headers=headers)
     assert response.status_code == 409
+
+    # Both departments this test created stay ACTIVE by default (the
+    # rename attempt failed, nothing got deleted) — the departments list
+    # is rendered in the frontend now, so leaving these behind means
+    # visible junk in a demo, not just noise in a query. Clean up.
+    client.delete(f"/departments/{id_a}", headers=headers)
+    client.delete(f"/departments/{id_b}", headers=headers)
 
 
 def test_put_can_restore_a_soft_deleted_department() -> None:
@@ -118,6 +125,11 @@ def test_put_can_restore_a_soft_deleted_department() -> None:
     restored = client.put(f"/departments/{department_id}", json={"is_active": True}, headers=headers)
     assert restored.status_code == 200
     assert restored.json()["is_active"] is True
+
+    # This test's whole point is proving restore leaves it ACTIVE - so
+    # unlike the others, cleanup here means deactivating it again
+    # afterward, not skipping cleanup because "it's already inactive".
+    client.delete(f"/departments/{department_id}", headers=headers)
 
 
 def test_put_cannot_set_is_active_false() -> None:
@@ -130,6 +142,39 @@ def test_put_cannot_set_is_active_false() -> None:
 
     response = client.put(f"/departments/{department_id}", json={"is_active": False}, headers=headers)
     assert response.status_code == 422
+
+    client.delete(f"/departments/{department_id}", headers=headers)
+
+
+def test_create_rejects_empty_name() -> None:
+    response = client.post("/departments", json={"name": ""}, headers=_ceo_headers())
+    assert response.status_code == 422
+
+
+def test_create_rejects_whitespace_only_name() -> None:
+    response = client.post("/departments", json={"name": "   "}, headers=_ceo_headers())
+    assert response.status_code == 422
+
+
+def test_create_rejects_name_over_max_length() -> None:
+    response = client.post("/departments", json={"name": "x" * 256}, headers=_ceo_headers())
+    assert response.status_code == 422
+
+
+def test_create_strips_name_so_padded_duplicate_is_rejected() -> None:
+    """The strip matters more than the reject (see app/schemas/common.py):
+    without it, "Sales" and " Sales " are distinct strings as far as the
+    UNIQUE constraint is concerned, and you'd get two departments in the
+    list nobody could tell apart.
+    """
+    headers = _ceo_headers()
+    name = _unique_name()
+    department_id = client.post("/departments", json={"name": name}, headers=headers).json()["id"]
+
+    padded_duplicate = client.post("/departments", json={"name": f" {name} "}, headers=headers)
+    assert padded_duplicate.status_code == 409
+
+    client.delete(f"/departments/{department_id}", headers=headers)
 
 
 @pytest.mark.parametrize(

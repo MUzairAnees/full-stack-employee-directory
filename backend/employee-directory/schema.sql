@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS employee_projects (
     PRIMARY KEY (employee_id, project_id)
 );
 
+-- Case-insensitive email uniqueness. employees.email UNIQUE alone isn't
+-- enough: Postgres TEXT equality is case-sensitive, so "a@x.com" and
+-- "A@x.com" would satisfy it as two distinct rows — two logins for one
+-- person, since email IS the login. Safe to add to an existing database
+-- (unlike editing a CREATE TABLE, see the README) — but if this fails,
+-- case-insensitive duplicates already exist and need resolving by hand,
+-- not silently worked around here.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_email_lower ON employees (LOWER(email));
+
 CREATE INDEX IF NOT EXISTS idx_employees_team_id ON employees(team_id);
 CREATE INDEX IF NOT EXISTS idx_employees_manager_id ON employees(manager_id);
 CREATE INDEX IF NOT EXISTS idx_employees_work_location_id ON employees(work_location_id);

@@ -1,21 +1,27 @@
 """Tests for authentication: login and current_user (/me).
 
-Six tests, matching what this slice is actually for — proving failed
-login gives nothing away, a deactivated account can't log in, and
-current_user rejects every broken-token shape:
+Proving failed login gives nothing away, a deactivated account can't log
+in (or keep using a token it got before being deactivated), current_user
+rejects every broken-token shape, and email is treated as case-insensitive:
   1. login succeeds with correct credentials
   2. wrong password -> 401
   3. unknown email -> 401, IDENTICAL body to #2
   4. deactivated employee -> 401 even with the right password
   5. missing/malformed Authorization header -> 401
-  6. tampered/expired token -> 401
+  6. tampered token -> 401
+  7. expired token -> 401
+  8. a valid token stops working the moment the account is deactivated,
+     not just once the token expires
+  9. login is case-insensitive on email
 """
 
+import bcrypt
 import jwt
 from fastapi.testclient import TestClient
 
+import app.repositories.db as db
 from app.main import app
-from app.services.auth_service import _JWT_ALGORITHM, _JWT_SECRET
+from app.services.auth_service import _BCRYPT_ROUNDS, _JWT_ALGORITHM, _JWT_SECRET
 
 client = TestClient(app)
 
@@ -68,7 +74,7 @@ def test_me_missing_or_malformed_authorization_header_returns_401() -> None:
     assert malformed.status_code == 401
 
 
-def test_me_tampered_or_expired_token_returns_401() -> None:
+def test_me_tampered_token_returns_401() -> None:
     login_response = client.post("/login", json={"email": _CEO_EMAIL, "password": _CEO_PASSWORD})
     real_token = login_response.json()["access_token"]
     # Reverse the signature segment rather than flipping its last
@@ -81,9 +87,70 @@ def test_me_tampered_or_expired_token_returns_401() -> None:
     header, payload, signature = real_token.split(".")
     tampered_token = f"{header}.{payload}.{signature[::-1]}"
 
-    tampered = client.get("/me", headers={"Authorization": f"Bearer {tampered_token}"})
-    assert tampered.status_code == 401
+    response = client.get("/me", headers={"Authorization": f"Bearer {tampered_token}"})
+    assert response.status_code == 401
 
+
+def test_me_expired_token_returns_401() -> None:
+    """A different failure path from tampering - a token that's
+    correctly signed but simply too old. Minted directly rather than
+    waiting 8h for a real one to expire.
+    """
     expired_token = jwt.encode({"sub": "1", "iat": 0, "exp": 1}, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
-    expired = client.get("/me", headers={"Authorization": f"Bearer {expired_token}"})
-    assert expired.status_code == 401
+    response = client.get("/me", headers={"Authorization": f"Bearer {expired_token}"})
+    assert response.status_code == 401
+
+
+def test_deactivating_employee_immediately_invalidates_their_existing_token() -> None:
+    """current_user re-reads the employee from the database on every
+    call rather than trusting the JWT payload - proving that holds even
+    for a token that WAS valid at issue time. If this ever regresses to
+    trusting the token alone, a deactivated employee keeps full access
+    until their token naturally expires (up to 8h) instead of losing it
+    on their very next request.
+
+    No employee-update endpoint exists yet (that's a later slice), so
+    deactivation here is a direct database write, same technique this
+    file used before the deactivated demo account was seeded instead.
+    """
+    email = "temp-deactivation-test@example.com"
+    password = "test-password-123"
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
+
+    conn = db.get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO employees (first_name, last_name, email, password_hash, role,
+                work_location_id, expertise_id, is_active)
+            VALUES ('Temp', 'ActiveThenNot', %s, %s, 'EMPLOYEE',
+                (SELECT id FROM work_locations WHERE name = 'Remote'),
+                (SELECT id FROM expertise WHERE name = 'Backend'), true)
+            ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true
+            """,
+            (email, password_hash),
+        )
+
+    token = client.post("/login", json={"email": email, "password": password}).json()["access_token"]
+
+    still_active = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+    assert still_active.status_code == 200
+
+    with conn.cursor() as cur:
+        cur.execute("UPDATE employees SET is_active = false WHERE email = %s", (email,))
+
+    # The SAME, still-unexpired token must now be rejected.
+    after_deactivation = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+    assert after_deactivation.status_code == 401
+
+
+def test_login_is_case_insensitive_on_email() -> None:
+    """email is UNIQUE and IS the login - without normalizing case,
+    "CEO@example.com" and "ceo@example.com" would be able to register as
+    two different accounts once slice 4 allows creating employees, or
+    (before that's even possible) simply fail to log in an existing user
+    who typed their email in a different case than it was stored in.
+    """
+    response = client.post("/login", json={"email": _CEO_EMAIL.upper(), "password": _CEO_PASSWORD})
+    assert response.status_code == 200
+    assert "access_token" in response.json()

@@ -61,6 +61,12 @@ def authenticate(email: str, password: str) -> str:
             deactivated account — identical in every observable way,
             including timing (see _DUMMY_HASH above).
     """
+    # Normalized the same way employee-create will need to (slice 4) and
+    # the schema's unique index does (LOWER(email), see schema.sql) — an
+    # email is the login; without this, "Uzair@example.com" and
+    # "uzair@example.com" would be two accounts for one person the
+    # moment slice 4 lets either be created.
+    email = email.strip().lower()
     employee = repo.get_employee_by_email(email)
 
     hash_to_check = employee.password_hash.encode() if employee else _DUMMY_HASH

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.schemas.common import NonEmptyName
+
 
 class DepartmentOut(BaseModel):
     """A department as returned by the API."""
@@ -21,7 +23,7 @@ class DepartmentOut(BaseModel):
 class DepartmentCreate(BaseModel):
     """POST /departments request body."""
 
-    name: str
+    name: NonEmptyName
 
 
 class DepartmentUpdate(BaseModel):
@@ -35,7 +37,7 @@ class DepartmentUpdate(BaseModel):
     letting PUT do it too would bypass that guard entirely.
     """
 
-    name: str | None = None
+    name: NonEmptyName | None = None
     is_active: Literal[True] | None = None
 
     @field_validator("is_active", mode="before")
