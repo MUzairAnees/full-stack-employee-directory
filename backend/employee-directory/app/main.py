@@ -1,8 +1,34 @@
 """FastAPI application entry point for the employee directory service."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app.controllers import auth, expertise, work_locations
+from app.exceptions import NotFoundError
 
 app = FastAPI(title="Employee Directory")
+
+app.include_router(auth.router)
+app.include_router(work_locations.router)
+app.include_router(expertise.router)
+
+
+@app.exception_handler(NotFoundError)
+async def not_found_error_handler(request: Request, exc: NotFoundError) -> JSONResponse:
+    """Maps every domain NotFoundError to 410 Gone, in exactly one place.
+
+    410, not 404: per workshop guidance, this platform's CloudFront
+    distribution reserves 404 for its SPA deep-link fallback (see README).
+    410 isn't semantically perfect for "never existed" — that's what 404
+    means — but it's what the platform leaves available, and every
+    controller's "get by id" raises the same NotFoundError and lands here
+    rather than each repeating its own status code.
+
+    This does not affect FastAPI's own 404 for unmatched routes — that's
+    a framework response we don't raise and don't control; see
+    frontend/src/services/api.js's apiFetch for how that case is handled.
+    """
+    return JSONResponse(status_code=410, content={"detail": str(exc)})
 
 
 @app.get("/health")

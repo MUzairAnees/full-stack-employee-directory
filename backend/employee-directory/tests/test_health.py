@@ -12,6 +12,7 @@ Two angles on purpose:
 from fastapi.testclient import TestClient
 
 from app.main import app
+from conftest import make_function_url_event
 from function import handler
 
 
@@ -27,26 +28,7 @@ def test_health_via_lambda_function_url_event() -> None:
     """The route still resolves when invoked through Mangum with a raw,
     unstripped AWS path — the exact shape CloudFront forwards on AWS.
     """
-    event = {
-        "version": "2.0",
-        "rawPath": "/api/employee-directory/health",
-        "rawQueryString": "",
-        "headers": {"host": "example.lambda-url.us-east-2.on.aws"},
-        "requestContext": {
-            "http": {
-                "method": "GET",
-                "path": "/api/employee-directory/health",
-                "protocol": "HTTP/1.1",
-                "sourceIp": "127.0.0.1",
-                "userAgent": "pytest",
-            },
-            "domainName": "example.lambda-url.us-east-2.on.aws",
-            "requestId": "test-request-id",
-            "time": "01/Jan/2026:00:00:00 +0000",
-            "timeEpoch": 1735689600,
-        },
-        "isBase64Encoded": False,
-    }
+    event = make_function_url_event("/api/employee-directory/health")
 
     response = handler(event, None)
 

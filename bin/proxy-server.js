@@ -91,7 +91,11 @@ const server = http.createServer((req, res) => {
   delete headers['sec-fetch-mode'];
   delete headers['sec-fetch-dest'];
 
-  // Keep only essential headers
+  // Keep only essential headers. Authorization is forwarded when present
+  // (added for slice 2's auth) — this whitelist predates auth and
+  // silently dropped it before, which is invisible on every unauthenticated
+  // endpoint and only shows up as an inexplicable 401 on a route that
+  // needs it.
   const options = {
     hostname: target.hostname,
     port: target.port,
@@ -101,7 +105,8 @@ const server = http.createServer((req, res) => {
       'accept': headers.accept || 'application/json',
       'content-type': headers['content-type'] || 'application/json',
       'user-agent': headers['user-agent'] || 'proxy-server',
-      'host': target.host
+      'host': target.host,
+      ...(headers.authorization ? { authorization: headers.authorization } : {})
     }
   };
 

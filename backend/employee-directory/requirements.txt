@@ -1,2 +1,5 @@
 fastapi==0.141.1
 mangum==0.22.0
+psycopg[binary]==3.3.5
+PyJWT==2.13.0
+bcrypt==5.0.0

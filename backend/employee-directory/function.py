@@ -9,8 +9,16 @@ locally, where bin/proxy-server.js already strips it before forwarding).
 Either way the FastAPI app only ever sees routes like "/health".
 """
 
+import logging
+
 from mangum import Mangum
 
-from app.main import app
+# The Lambda runtime pre-attaches a root handler whose level filters out
+# INFO — force=True replaces it so app.db_init's migration log lines (and
+# anything else at INFO) actually reach CloudWatch instead of being
+# silently dropped.
+logging.basicConfig(level=logging.INFO, force=True)
+
+from app.main import app  # noqa: E402
 
 handler = Mangum(app, lifespan="off", api_gateway_base_path="/api/employee-directory")

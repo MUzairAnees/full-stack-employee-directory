@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
+import { AppBar, Box, Button, CircularProgress, Toolbar, Typography } from '@mui/material';
 import { getHealth } from './services/api';
+import WorkLocations from './pages/WorkLocations';
+import Login from './pages/Login';
+import { useCurrentUser } from './context/CurrentUserContext';
 
 /**
- * Root component for slice 0. Its only job is to prove the full local
- * chain works: browser -> CORS proxy (3001) -> LocalStack Lambda Function
- * URL -> FastAPI. It calls the health endpoint on mount and renders
- * whatever comes back, plainly, so a broken chain is obvious on screen.
+ * Root component. Still no router (one real page doesn't need one yet) —
+ * signed-in state alone decides what renders: Login, or the app content
+ * with a "signed in as <name> (<role>)" line and a Sign out button.
  */
 function App() {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
+  const { currentUser, logout } = useCurrentUser();
 
   useEffect(() => {
     getHealth()
@@ -17,11 +21,35 @@ function App() {
       .catch((err) => setError(err.message));
   }, []);
 
-  if (error) {
-    return <p>API error: {error}</p>;
+  if (currentUser === undefined) {
+    return <CircularProgress sx={{ display: 'block', mx: 'auto', mt: 8 }} />;
   }
 
-  return <p>API: {status ?? 'loading...'}</p>;
+  if (!currentUser) {
+    return <Login />;
+  }
+
+  return (
+    <>
+      <AppBar position="static">
+        <Toolbar sx={{ justifyContent: 'space-between' }}>
+          <Typography>
+            Signed in as {currentUser.first_name} {currentUser.last_name} ({currentUser.role})
+          </Typography>
+          <Button color="inherit" onClick={logout}>
+            Sign out
+          </Button>
+        </Toolbar>
+      </AppBar>
+      <Box sx={{ p: 2 }}>
+        <p>API: {error ? `error: ${error}` : (status ?? 'loading...')}</p>
+        <Typography variant="h5" component="h1">
+          Work Locations
+        </Typography>
+        <WorkLocations />
+      </Box>
+    </>
+  );
 }
 
 export default App;
