@@ -124,6 +124,20 @@ CREATE INDEX IF NOT EXISTS idx_employees_manager_id ON employees(manager_id);
 CREATE INDEX IF NOT EXISTS idx_employees_work_location_id ON employees(work_location_id);
 CREATE INDEX IF NOT EXISTS idx_employees_is_active ON employees(is_active);
 CREATE INDEX IF NOT EXISTS idx_employees_expertise_id ON employees(expertise_id);
+
+-- At most one active team per manager. A slice 5 correction: this was
+-- documented as already existing (it wasn't — a planning error, never
+-- built). Checked local Postgres for existing violations before adding
+-- it (0 teams rows, so trivially clean) — same discipline as
+-- idx_employees_one_active_ceo, run anyway because the identical check
+-- runs against real Aurora data at cold start and the habit is the
+-- point, not the local result. Also the backstop behind
+-- team_repository's "already manages another active team" app-level
+-- check: that check alone has a TOCTOU race window between its SELECT
+-- and the UPDATE; this index is what actually closes it, translated to
+-- a clean 409 rather than a raw constraint error reaching the caller.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_one_active_manager ON teams (manager_id) WHERE is_active;
+
 CREATE INDEX IF NOT EXISTS idx_teams_department_id ON teams(department_id);
 CREATE INDEX IF NOT EXISTS idx_teams_manager_id ON teams(manager_id);
 CREATE INDEX IF NOT EXISTS idx_employee_skills_skill_id ON employee_skills(skill_id);

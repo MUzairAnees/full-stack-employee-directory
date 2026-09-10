@@ -144,6 +144,9 @@ def test_deactivating_employee_immediately_invalidates_their_existing_token() ->
     after_deactivation = client.get("/me", headers={"Authorization": f"Bearer {token}"})
     assert after_deactivation.status_code == 401
 
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM employees WHERE email = %s", (email,))
+
 
 def test_login_is_case_insensitive_on_email() -> None:
     """email is UNIQUE and IS the login - without normalizing case,
@@ -192,3 +195,11 @@ def test_login_finds_a_mixed_case_stored_email() -> None:
     response = client.post("/login", json={"email": email_mixed_case.lower(), "password": password})
     assert response.status_code == 200
     assert "access_token" in response.json()
+
+    # Slice 5 section 7: hard-delete, not soft — this row is ACTIVE (it's
+    # proving login works, not deactivation), so leaving it behind isn't
+    # just hidden noise, it's a permanently visible extra row in the
+    # employees list. Found exactly that way: showed up in the frontend
+    # against local Postgres but not against a fresh Aurora.
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM employees WHERE email = %s", (email_mixed_case,))

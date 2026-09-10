@@ -14,10 +14,11 @@ _COLUMNS = (
     "is_active, created_at, updated_at"
 )
 
-# Sentinel distinguishing "phone not included in this update at all" (do
-# not touch it) from "phone included, and is null" (clear it). Only
-# phone needs this: first_name/last_name/role are never legitimately
-# submitted as an explicit null, so plain `is not None` covers them.
+# Sentinel distinguishing "field not included in this update at all" (do
+# not touch it) from "field included, and is null" (clear it). Only
+# phone and team_id need this: first_name/last_name/role/work_location_id/
+# expertise_id/project_availability are never legitimately submitted as
+# an explicit null, so plain `is not None` covers them.
 UNSET = object()
 
 _FK_CONSTRAINT_TO_FIELD = {
@@ -51,7 +52,10 @@ def get_employee_by_id(employee_id: int) -> Employee | None:
 
     Used by the current_user dependency to re-read the employee (and in
     particular is_active) from the database on every authenticated
-    request, rather than trusting the JWT payload.
+    request, rather than trusting the JWT payload. Also used by
+    team_repository to look up a manager nominee — deliberately not
+    promoted alongside compute_manager_id/get_ceo_id below, since it was
+    already public.
     """
     conn = get_connection()
     with conn.cursor(row_factory=class_row(Employee)) as cur:
@@ -89,8 +93,7 @@ def list_employees(
 
     department_id filters through teams (a subquery, not stored on
     employees directly — see schema.sql's comment on why), same as the
-    department delete-guard; like team_id, it's real and correct now but
-    can't return anything until slice 5 populates teams.
+    department delete-guard.
     """
     conditions: list[str] = []
     params: list = []
@@ -131,16 +134,22 @@ def get_reports(manager_id: int) -> list[Employee]:
     """Direct reports: everyone whose manager_id is this employee's id.
 
     An employee with no team has manager_id = the CEO (see
-    _compute_manager_id), so they correctly appear here alongside actual
+    compute_manager_id), so they correctly appear here alongside actual
     managers when manager_id is the CEO's id — not a bug to filter out.
     """
     return list_employees(manager_id=manager_id)
 
 
-def _get_ceo_id(conn) -> int:
+def get_ceo_id(conn) -> int:
     """The single active CEO's id. There is always exactly one —
     schema.sql's idx_employees_one_active_ceo enforces it and the CEO
     can never be deactivated (soft_delete_employee).
+
+    Public (promoted from _get_ceo_id in slice 5): team_repository needs
+    it too — for pooling a released manager, and for a newly-nominated
+    manager's own manager_id. Takes the caller's connection rather than
+    opening its own, so it always participates in whatever transaction
+    the caller is already inside.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM employees WHERE role = 'CEO'")
@@ -149,7 +158,7 @@ def _get_ceo_id(conn) -> int:
     return row[0]
 
 
-def _compute_manager_id(conn, role: str, team_id: int | None) -> int | None:
+def compute_manager_id(conn, role: str, team_id: int | None) -> int | None:
     """The org-chart derivation. Never settable directly by a caller —
     called from every write path that touches team_id or role — which is
     what makes a manager_id cycle structurally impossible: every chain is
@@ -159,21 +168,34 @@ def _compute_manager_id(conn, role: str, team_id: int | None) -> int | None:
         role = MANAGER  -> the CEO's id
         anyone else     -> their team's manager, or the CEO's id if
                            they have no team (including ADMIN)
+
+    Public (promoted from _compute_manager_id in slice 5): team_repository
+    needs the exact same derivation for team create/replace/delete — one
+    source, not a second copy, same reasoning as the BCRYPT_ROUNDS move
+    to app/config.py in slice 4.
     """
     if role == Role.CEO:
         return None
     if role == Role.MANAGER:
-        return _get_ceo_id(conn)
+        return get_ceo_id(conn)
     if team_id is not None:
         with conn.cursor() as cur:
             cur.execute("SELECT manager_id FROM teams WHERE id = %s", (team_id,))
             row = cur.fetchone()
         if row is not None:
             return row[0]
-    return _get_ceo_id(conn)
+    return get_ceo_id(conn)
 
 
 def _manages_active_team(conn, employee_id: int) -> bool:
+    """True if this employee is the manager of an active team.
+
+    Stays private: only used internally, for the role-change demotion
+    guard below and the team_id LOCK guard. team_repository never needs
+    it directly — every nominee it validates is already required to have
+    role EMPLOYEE, which structurally rules this out (see
+    team_repository._require_eligible_nominee).
+    """
     with conn.cursor() as cur:
         cur.execute("SELECT EXISTS (SELECT 1 FROM teams WHERE manager_id = %s AND is_active)", (employee_id,))
         return cur.fetchone()[0]
@@ -204,21 +226,21 @@ def create_employee(
     project_availability: bool = True,
 ) -> Employee:
     """Creates an employee. team_id is always NULL at creation — team
-    assignment isn't a capability that exists yet (slice 5's
-    "CEO creates the team around them" flow sets it later); manager_id
-    is derived, never accepted as input (see _compute_manager_id).
-    A MANAGER created this way legitimately has team_id NULL — the
-    transient state before slice 5 builds a team around them.
+    assignment isn't a capability POST /employees has, ever (see
+    app/schemas/employee.py: role is restricted to EMPLOYEE/ADMIN here,
+    so a MANAGER can never exist without a team — slice 5 section 0).
+    manager_id is derived, never accepted as input (see
+    compute_manager_id).
 
     Raises:
         DuplicateError: email (including a case variant) is already
-            taken, or role=CEO was requested while an active CEO exists.
+            taken.
         InvalidReferenceError: work_location_id or expertise_id doesn't
             reference a real row — names which one.
     """
     email = email.strip().lower()
     conn = get_connection()
-    manager_id = _compute_manager_id(conn, role, team_id=None)
+    manager_id = compute_manager_id(conn, role, team_id=None)
 
     try:
         with conn.cursor(row_factory=class_row(Employee)) as cur:
@@ -253,32 +275,73 @@ def create_employee(
         raise _translate_fk_violation(err) from err
 
 
+def _require_active_team_or_raise(conn, team_id: int) -> None:
+    """Guards the one FK a plain foreign-key constraint can't cover:
+    team_id can reference a row that exists but is soft-deleted. Same
+    reasoning as team_repository's department check — a caller placing
+    someone onto a dead team would be invisible to every guard that
+    assumes an active team has an active manager.
+
+    422, not 409: consistent with the rest of this slice's "inactive
+    reference" handling — it also means a caller can't distinguish
+    "never existed" from "was deleted" from the response alone, which is
+    what soft delete is supposed to mean to the outside world.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT is_active FROM teams WHERE id = %s", (team_id,))
+        row = cur.fetchone()
+    if row is None or not row[0]:
+        raise InvalidReferenceError("team_id", "team_id does not reference an active team")
+
+
 def update_employee(
     employee_id: int,
     first_name: str | None = None,
     last_name: str | None = None,
     phone=UNSET,
     role: str | None = None,
+    work_location_id: int | None = None,
+    project_availability: bool | None = None,
+    expertise_id: int | None = None,
+    team_id=UNSET,
 ) -> Employee:
-    """Updates an employee. Which fields to touch is the caller's
-    decision (authorization lives in employee_service, not here) — this
-    just applies whichever of first_name/last_name/phone/role were
-    given. The SET clause stays a fixed, hardcoded set of "if field is
-    not None/UNSET" branches, not a loop over changed fields: a loop
-    deriving column names from input is exactly the identifier-injection
-    shape parameterization doesn't cover.
+    """Updates an employee. Which fields a given caller may submit is
+    authorization, decided in employee_service, not here — this applies
+    whichever fields were given and enforces the guards that depend on
+    database state, not on who's asking. The SET clause stays a fixed,
+    hardcoded set of "if field is not None/UNSET" branches, not a loop
+    over changed fields: a loop deriving column names from input is
+    exactly the identifier-injection shape parameterization doesn't
+    cover.
 
-    A role change recomputes manager_id (see _compute_manager_id) and,
-    if it would move someone away from MANAGER while they still manage
-    an active team, is rejected outright — that guard can't fire yet
-    (no teams exist), same treatment as the department delete-guard.
+    A role change recomputes manager_id (see compute_manager_id) and, if
+    it would move someone away from MANAGER while they still manage an
+    active team, is rejected outright. As of slice 5 this guard is no
+    longer dormant: role MANAGER now only ever exists while its holder
+    manages an active team (section 0's invariant — team_repository is
+    the only path that sets or clears it), so this condition is
+    equivalent to "always block moving a current MANAGER away from
+    MANAGER through this endpoint" — direct demotion, like direct
+    promotion, doesn't exist; both fall out of team operations only.
+
+    A team_id change is LOCKED for anyone who currently manages an
+    active team — not just for that manager, for every caller, Admin
+    included: the only path that reassigns a team's manager is
+    PUT /teams. Otherwise recomputes manager_id the same way
+    compute_manager_id derives it anywhere else (their new team's
+    manager, or the CEO if released to NULL), and — for a non-NULL
+    value — requires the target team to exist and be active.
 
     Raises:
         NotFoundError: no such employee.
         DependentsExistError: role change would leave an active team
-            without the manager it was pointing at.
-        DuplicateError: email conflict (not reachable via this
-            function yet — email isn't self/Admin-editable this slice).
+            without the manager it was pointing at; or a team_id change
+            was attempted for someone who currently manages an active
+            team (see LOCK above).
+        InvalidReferenceError: team_id names a team that doesn't exist
+            or isn't active.
+        DuplicateError: email conflict (not reachable via this function
+            yet — email isn't self/Admin/Manager-editable this slice).
     """
     conn = get_connection()
     current = get_employee(employee_id)
@@ -295,16 +358,37 @@ def update_employee(
     if phone is not UNSET:
         updates.append("phone = %s")
         params.append(phone)
+    if work_location_id is not None:
+        updates.append("work_location_id = %s")
+        params.append(work_location_id)
+    if project_availability is not None:
+        updates.append("project_availability = %s")
+        params.append(project_availability)
+    if expertise_id is not None:
+        updates.append("expertise_id = %s")
+        params.append(expertise_id)
     if role is not None:
         if current.role == Role.MANAGER and role != Role.MANAGER and _manages_active_team(conn, employee_id):
             raise DependentsExistError(
                 f"employee {employee_id} manages an active team and cannot be reassigned away from MANAGER"
             )
-        manager_id = _compute_manager_id(conn, role, current.team_id)
+        manager_id = compute_manager_id(conn, role, current.team_id)
         updates.append("role = %s")
         params.append(role)
         updates.append("manager_id = %s")
         params.append(manager_id)
+    if team_id is not UNSET:
+        if _manages_active_team(conn, employee_id):
+            raise DependentsExistError(
+                f"employee {employee_id} manages an active team; reassign the team's manager via PUT /teams instead"
+            )
+        if team_id is not None:
+            _require_active_team_or_raise(conn, team_id)
+        new_manager_id = compute_manager_id(conn, current.role, team_id)
+        updates.append("team_id = %s")
+        params.append(team_id)
+        updates.append("manager_id = %s")
+        params.append(new_manager_id)
 
     if not updates:
         return current
@@ -312,12 +396,16 @@ def update_employee(
     updates.append("updated_at = now()")
     params.append(employee_id)
 
-    with conn.cursor(row_factory=class_row(Employee)) as cur:
-        cur.execute(
-            f"UPDATE employees SET {', '.join(updates)} WHERE id = %s RETURNING {_COLUMNS}",
-            params,
-        )
-        return cur.fetchone()
+    try:
+        with conn.cursor(row_factory=class_row(Employee)) as cur:
+            cur.execute(
+                f"UPDATE employees SET {', '.join(updates)} WHERE id = %s RETURNING {_COLUMNS}",
+                params,
+            )
+            return cur.fetchone()
+    except psycopg.errors.ForeignKeyViolation as err:
+        conn.rollback()
+        raise _translate_fk_violation(err) from err
 
 
 def soft_delete_employee(employee_id: int) -> Employee:
@@ -325,6 +413,14 @@ def soft_delete_employee(employee_id: int) -> Employee:
     already-inactive check runs BEFORE any guard, same reasoning as
     department_repository.soft_delete_department: idempotent means
     idempotent regardless of what changes around it later.
+
+    If the employee is a MANAGER (only reachable once the active-reports
+    guard below has already passed — meaning no active member OTHER than
+    themselves is left on their team), deactivating them also deactivates
+    their now-manager-less team, in the SAME transaction: teams.manager_id
+    is NOT NULL and cannot be left pointing at an inactive person. This is
+    the first multi-statement, genuinely atomic write in this codebase —
+    see the comment on conn.transaction() usage below.
 
     Raises:
         NotFoundError: no such employee.
@@ -352,9 +448,28 @@ def soft_delete_employee(employee_id: int) -> Employee:
         if cur.fetchone()[0]:
             raise DependentsExistError(f"employee {employee_id} has active direct reports and cannot be deactivated")
 
-    with conn.cursor(row_factory=class_row(Employee)) as cur:
-        cur.execute(
-            f"UPDATE employees SET is_active = false, updated_at = now() WHERE id = %s RETURNING {_COLUMNS}",
-            (employee_id,),
-        )
-        return cur.fetchone()
+    # conn.transaction(): the connection is autocommit=True (app/repositories/db.py)
+    # and, until this slice, every write here has been a single statement —
+    # autocommit alone made each one atomic on its own. This is the first
+    # operation that must NOT partially apply: deactivating the employee
+    # without also deactivating their team (or vice versa) leaves
+    # teams.manager_id pointing at an inactive person. conn.transaction()
+    # temporarily suspends autocommit for the block, issuing a real
+    # BEGIN, and COMMITs on a clean exit or ROLLBACKs on an exception —
+    # unlike the except blocks elsewhere in this file, nothing inside this
+    # block calls conn.rollback() itself; that's the context manager's job.
+    with conn.transaction():
+        with conn.cursor(row_factory=class_row(Employee)) as cur:
+            cur.execute(
+                f"UPDATE employees SET is_active = false, updated_at = now() WHERE id = %s RETURNING {_COLUMNS}",
+                (employee_id,),
+            )
+            employee = cur.fetchone()
+        if employee.role == Role.MANAGER:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE teams SET is_active = false, updated_at = now() WHERE manager_id = %s AND is_active",
+                    (employee_id,),
+                )
+
+    return employee

@@ -4,6 +4,7 @@ import { getHealth } from './services/api';
 import WorkLocations from './pages/WorkLocations';
 import Departments from './pages/Departments';
 import Employees from './pages/Employees';
+import Teams from './pages/Teams';
 import Login from './pages/Login';
 import { useCurrentUser } from './context/CurrentUserContext';
 
@@ -57,6 +58,10 @@ function App() {
           Employees
         </Typography>
         <Employees />
+        <Typography variant="h5" component="h1" sx={{ mt: 2 }}>
+          Teams
+        </Typography>
+        <Teams />
       </Box>
     </>
   );

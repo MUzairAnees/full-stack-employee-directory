@@ -15,6 +15,55 @@ os.environ.setdefault("POSTGRES_USER", "postgres")
 os.environ.setdefault("POSTGRES_PASS", "postgres123")
 
 
+def hard_delete_departments(conn, department_ids: list[int]) -> None:
+    """Hard-deletes departments by id — test teardown only; the real
+    DELETE /departments always soft-deletes. Nothing references
+    departments.id except teams.department_id, so this is safe on its
+    own as long as any teams created in the same test are torn down
+    first (hard_delete_teams).
+    """
+    if not department_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM departments WHERE id = ANY(%s)", (department_ids,))
+
+
+def hard_delete_teams(conn, team_ids: list[int]) -> None:
+    """Hard-deletes teams by id — test teardown only; there is no
+    user-facing hard-delete anywhere in the app, DELETE /teams always
+    soft-deletes.
+
+    Clears employees.team_id for anyone still pointing at these teams
+    first (their manager_id is left as-is; pair with
+    hard_delete_employees for the employees themselves). Call this
+    BEFORE hard_delete_employees when a test created both a team and its
+    manager — the team's manager_id FK would otherwise block deleting
+    the employee first.
+    """
+    if not team_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute("UPDATE employees SET team_id = NULL WHERE team_id = ANY(%s)", (team_ids,))
+        cur.execute("DELETE FROM teams WHERE id = ANY(%s)", (team_ids,))
+
+
+def hard_delete_employees(conn, employee_ids: list[int]) -> None:
+    """Hard-deletes employees by id — test teardown only; the real
+    DELETE /employees always soft-deletes (see employee_repository).
+
+    employees.manager_id is self-referencing (a plain FK, no ON DELETE
+    clause — RESTRICT by default), so an employee in this set who is
+    another employee in this set's manager_id would block the DELETE.
+    Cleared first, safe regardless of what order the ids were created
+    in or what pointed at what.
+    """
+    if not employee_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute("UPDATE employees SET manager_id = NULL WHERE manager_id = ANY(%s)", (employee_ids,))
+        cur.execute("DELETE FROM employees WHERE id = ANY(%s)", (employee_ids,))
+
+
 def make_function_url_event(raw_path: str) -> dict:
     """Builds a fake Lambda Function URL event (payload format 2.0) for a
     given raw path, so tests can invoke function.handler() directly with

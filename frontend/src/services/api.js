@@ -314,3 +314,16 @@ export async function listEmployees() {
   }
   return response.json();
 }
+
+/**
+ * Lists teams.
+ *
+ * @returns {Promise<Array<{id: number, name: string, department_id: number, manager_id: number, is_active: boolean}>>}
+ */
+export async function listTeams() {
+  const response = await authFetch('/teams');
+  if (!response.ok) {
+    throw classifyError(response);
+  }
+  return response.json();
+}

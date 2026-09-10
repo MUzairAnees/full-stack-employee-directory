@@ -65,11 +65,44 @@ def create_employee(body: EmployeeCreate) -> Employee:
 
 
 def update_employee(actor: Employee, target_id: int, update: EmployeeUpdate) -> Employee:
-    """Authorization split, enforced here rather than in the repository:
-      - self may set first_name/last_name/phone — "contact info" this
-        slice (see README)
-      - Admin may set role, for anyone including themselves
-      - nothing else is permitted, regardless of who's asking
+    """Authorization, enforced here rather than in the repository — each
+    field family gets its own check, and each REJECTS (403) a caller who
+    isn't allowed to touch it, rather than silently dropping the field:
+    a silently-dropped field returns 200 and leaves the caller believing
+    the change saved, which is invisible in testing and confusing in use.
+
+    As of slice 5:
+        first_name / last_name / phone          -> self, manager of this
+                                                     employee's team, or
+                                                     Admin
+        work_location_id / project_availability
+            / expertise_id                       -> manager of this
+                                                     employee's team, or
+                                                     Admin (not self)
+        role                                      -> Admin
+        team_id                                   -> Admin, or manager
+                                                     of this employee's
+                                                     team (release, null,
+                                                     only — placing a
+                                                     real value is
+                                                     Admin-only)
+
+    "manager of this employee's team" is checked against the TARGET's
+    team_id as fetched here, at the top, BEFORE any change — not
+    before-or-after: the CEO has team_id NULL, so an after-the-fact
+    check would let a manager claim the CEO onto their team and then
+    edit them. A manager editing THEMSELVES also satisfies this check
+    (their own team_id equals the team they manage), which is intended,
+    not a special case — see employee_repository.compute_manager_id and
+    team_repository for why a manager's team_id is always their managed
+    team's id.
+
+    The team_id LOCK (an employee who currently manages an active team
+    can't have team_id touched by anyone, Admin included) lives in
+    employee_repository.update_employee, checked AFTER this function's
+    authorization — never reveal a business invariant to a caller who
+    had no standing to ask in the first place, the same principle behind
+    checking authentication before authorization.
 
     Raises:
         HTTPException: 403 if the caller isn't allowed to touch the
@@ -78,22 +111,41 @@ def update_employee(actor: Employee, target_id: int, update: EmployeeUpdate) -> 
     target = repo.get_employee(target_id)
     is_self = actor.id == target.id
     is_admin = actor.role == Role.ADMIN
-
-    if not is_self and not is_admin:
-        raise HTTPException(status_code=403, detail="you don't have permission")
-
-    touching_identity = (
-        update.first_name is not None or update.last_name is not None or "phone" in update.model_fields_set
+    is_manager_of_target = (
+        actor.role == Role.MANAGER and actor.team_id is not None and actor.team_id == target.team_id
     )
-    if touching_identity and not is_self:
-        raise HTTPException(status_code=403, detail="you can only edit your own contact info")
 
-    if update.role is not None and not is_admin:
+    fields_set = update.model_fields_set
+
+    identity_fields = {"first_name", "last_name", "phone"} & fields_set
+    if identity_fields and not (is_self or is_manager_of_target or is_admin):
+        raise HTTPException(status_code=403, detail="you don't have permission to edit this employee's contact info")
+
+    placement_fields = {"work_location_id", "project_availability", "expertise_id"} & fields_set
+    if placement_fields and not (is_manager_of_target or is_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="only this employee's team manager or an Admin can edit work location, availability, or expertise",
+        )
+
+    if "role" in fields_set and not is_admin:
         raise HTTPException(status_code=403, detail="only Admin can change role")
 
-    # UNSET, not None, when phone wasn't in the request at all — None
-    # would mean "clear it", which is a real, different instruction.
-    phone_value = update.phone if "phone" in update.model_fields_set else repo.UNSET
+    if "team_id" in fields_set:
+        if not (is_admin or is_manager_of_target):
+            raise HTTPException(
+                status_code=403, detail="only Admin or this employee's team manager can change team_id"
+            )
+        if is_manager_of_target and not is_admin and update.team_id is not None:
+            raise HTTPException(
+                status_code=403, detail="a manager may only release a team member (team_id to null), not place one"
+            )
+
+    # UNSET, not None, when a field wasn't in the request at all — None
+    # would mean "clear it", a real, different instruction. Applies to
+    # phone (can be cleared) and team_id (can be released to null).
+    phone_value = update.phone if "phone" in fields_set else repo.UNSET
+    team_id_value = update.team_id if "team_id" in fields_set else repo.UNSET
 
     return repo.update_employee(
         target_id,
@@ -101,6 +153,10 @@ def update_employee(actor: Employee, target_id: int, update: EmployeeUpdate) -> 
         last_name=update.last_name,
         phone=phone_value,
         role=update.role,
+        work_location_id=update.work_location_id,
+        project_availability=update.project_availability,
+        expertise_id=update.expertise_id,
+        team_id=team_id_value,
     )
 
 

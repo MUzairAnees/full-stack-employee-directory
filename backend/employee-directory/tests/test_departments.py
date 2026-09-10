@@ -5,7 +5,9 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+import app.repositories.db as db
 from app.main import app
+from conftest import hard_delete_departments
 
 client = TestClient(app)
 
@@ -30,6 +32,15 @@ def _admin_headers() -> dict:
 
 def _unique_name() -> str:
     return f"Test Dept {uuid.uuid4().hex[:8]}"
+
+
+def _cleanup(*department_ids: int) -> None:
+    """Hard-deletes departments — test teardown only, the real DELETE
+    always soft-deletes. Soft-deleting via the API (as these tests still
+    do to exercise the endpoint itself) leaves the row in the table
+    forever; this removes it for real once the test is done with it.
+    """
+    hard_delete_departments(db.get_connection(), list(department_ids))
 
 
 def test_ceo_can_create_list_get_rename_and_soft_delete_a_department() -> None:
@@ -71,6 +82,8 @@ def test_ceo_can_create_list_get_rename_and_soft_delete_a_department() -> None:
     listed_with_inactive = client.get("/departments?include_inactive=true", headers=headers)
     assert any(d["id"] == department_id for d in listed_with_inactive.json())
 
+    _cleanup(department_id)
+
 
 def test_get_unknown_department_returns_410() -> None:
     response = client.get("/departments/999999", headers=_ceo_headers())
@@ -88,6 +101,8 @@ def test_delete_is_idempotent_returns_200_not_409() -> None:
     assert second.status_code == 200
     assert second.json()["is_active"] is False
 
+    _cleanup(department_id)
+
 
 def test_create_with_name_of_soft_deleted_department_returns_409() -> None:
     headers = _ceo_headers()
@@ -97,6 +112,8 @@ def test_create_with_name_of_soft_deleted_department_returns_409() -> None:
 
     duplicate = client.post("/departments", json={"name": name}, headers=headers)
     assert duplicate.status_code == 409
+
+    _cleanup(department_id)
 
 
 def test_rename_to_an_existing_name_returns_409() -> None:
@@ -109,12 +126,7 @@ def test_rename_to_an_existing_name_returns_409() -> None:
     response = client.put(f"/departments/{id_a}", json={"name": name_b}, headers=headers)
     assert response.status_code == 409
 
-    # Both departments this test created stay ACTIVE by default (the
-    # rename attempt failed, nothing got deleted) — the departments list
-    # is rendered in the frontend now, so leaving these behind means
-    # visible junk in a demo, not just noise in a query. Clean up.
-    client.delete(f"/departments/{id_a}", headers=headers)
-    client.delete(f"/departments/{id_b}", headers=headers)
+    _cleanup(id_a, id_b)
 
 
 def test_put_can_restore_a_soft_deleted_department() -> None:
@@ -126,10 +138,7 @@ def test_put_can_restore_a_soft_deleted_department() -> None:
     assert restored.status_code == 200
     assert restored.json()["is_active"] is True
 
-    # This test's whole point is proving restore leaves it ACTIVE - so
-    # unlike the others, cleanup here means deactivating it again
-    # afterward, not skipping cleanup because "it's already inactive".
-    client.delete(f"/departments/{department_id}", headers=headers)
+    _cleanup(department_id)
 
 
 def test_put_cannot_set_is_active_false() -> None:
@@ -143,7 +152,7 @@ def test_put_cannot_set_is_active_false() -> None:
     response = client.put(f"/departments/{department_id}", json={"is_active": False}, headers=headers)
     assert response.status_code == 422
 
-    client.delete(f"/departments/{department_id}", headers=headers)
+    _cleanup(department_id)
 
 
 def test_create_rejects_empty_name() -> None:
@@ -174,7 +183,7 @@ def test_create_strips_name_so_padded_duplicate_is_rejected() -> None:
     padded_duplicate = client.post("/departments", json={"name": f" {name} "}, headers=headers)
     assert padded_duplicate.status_code == 409
 
-    client.delete(f"/departments/{department_id}", headers=headers)
+    _cleanup(department_id)
 
 
 @pytest.mark.parametrize(
@@ -217,11 +226,11 @@ def test_list_and_get_require_authentication() -> None:
     assert client.get("/departments/1").status_code == 401
 
 
-@pytest.mark.skip(
-    reason="waits for slice 5 (teams): there's no way yet to attach an "
-    "active employee to a department, so the positive-rejection case "
-    "(delete blocked because active employees exist) can't be "
-    "exercised. Replace this skip with a real test once teams exist."
-)
-def test_delete_blocked_by_active_employees() -> None:
-    pass
+# test_delete_blocked_by_active_employees: this used to be a
+# @pytest.mark.skip stub, waiting on teams (slice 3's note: "there's no
+# way yet to attach an active employee to a department"). Teams exist
+# now — the real, un-skipped version of this test lives in
+# tests/test_teams.py as
+# test_department_delete_blocked_by_an_active_team_with_an_active_employee,
+# alongside the team fixtures it actually needs, rather than duplicated
+# here.
