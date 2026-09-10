@@ -10,7 +10,11 @@ from app.services import team_service as service
 router = APIRouter(prefix="/teams", tags=["teams"])
 
 
-@router.get("", response_model=list[TeamOut])
+@router.get(
+    "",
+    response_model=list[TeamOut],
+    responses={401: {"description": "Not authenticated."}},
+)
 def list_teams(
     department_id: int | None = Query(default=None),
     include_inactive: bool = Query(default=False),
@@ -20,7 +24,14 @@ def list_teams(
     return service.list_teams(department_id=department_id, include_inactive=include_inactive)
 
 
-@router.get("/{team_id}", response_model=TeamOut)
+@router.get(
+    "/{team_id}",
+    response_model=TeamOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        410: {"description": "No team with this id."},
+    },
+)
 def get_team(team_id: int, _employee=Depends(current_user)) -> TeamOut:
     """Any authenticated employee can look up a team by id.
 
@@ -31,7 +42,20 @@ def get_team(team_id: int, _employee=Depends(current_user)) -> TeamOut:
     return service.get_team(team_id)
 
 
-@router.post("", response_model=TeamOut, status_code=201)
+@router.post(
+    "",
+    response_model=TeamOut,
+    status_code=201,
+    responses={
+        201: {"description": "Created; the nominee is now MANAGER of this team."},
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't CEO."},
+        409: {"description": "The nominee isn't eligible (role isn't EMPLOYEE, or already assigned to a "
+              "different team), or the team name collides within the department."},
+        422: {"description": "department_id or manager_id doesn't reference an existing row, or department_id "
+              "references a soft-deleted department (field named in the response)."},
+    },
+)
 def create_team(body: TeamCreate, _employee=Depends(require_role(Role.CEO))) -> TeamOut:
     """CEO only. Atomically creates the team and promotes the nominated
     employee to MANAGER — see team_service/team_repository for the full
@@ -40,7 +64,19 @@ def create_team(body: TeamCreate, _employee=Depends(require_role(Role.CEO))) -> 
     return service.create_team(body)
 
 
-@router.put("/{team_id}", response_model=TeamOut)
+@router.put(
+    "/{team_id}",
+    response_model=TeamOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't CEO."},
+        409: {"description": "The replacement isn't eligible, or the new name collides within the "
+              "(possibly new) department."},
+        410: {"description": "No team with this id."},
+        422: {"description": "department_id or manager_id doesn't reference an existing row, or department_id "
+              "references a soft-deleted department (field named in the response)."},
+    },
+)
 def update_team(team_id: int, body: TeamUpdate, _employee=Depends(require_role(Role.CEO))) -> TeamOut:
     """CEO only. Renames, moves to another department, and/or replaces
     the manager — see team_repository.update_team for the full
@@ -49,7 +85,16 @@ def update_team(team_id: int, body: TeamUpdate, _employee=Depends(require_role(R
     return service.update_team(team_id, body)
 
 
-@router.delete("/{team_id}", response_model=TeamOut)
+@router.delete(
+    "/{team_id}",
+    response_model=TeamOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't CEO."},
+        409: {"description": "Active members other than the manager remain."},
+        410: {"description": "No team with this id."},
+    },
+)
 def delete_team(team_id: int, _employee=Depends(require_role(Role.CEO))) -> TeamOut:
     """CEO only. Soft-deletes a team and releases its manager to the
     pool. Idempotent. Blocked while active members other than the

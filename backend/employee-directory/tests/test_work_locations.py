@@ -11,7 +11,7 @@ from function import handler
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 
 
 def _ceo_headers() -> dict:

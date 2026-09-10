@@ -10,7 +10,11 @@ from app.services import work_location_service as service
 router = APIRouter(prefix="/work-locations", tags=["work-locations"])
 
 
-@router.get("", response_model=list[WorkLocationOut])
+@router.get(
+    "",
+    response_model=list[WorkLocationOut],
+    responses={401: {"description": "Not authenticated."}},
+)
 def list_work_locations(_employee: Employee = Depends(current_user)) -> list[WorkLocationOut]:
     """Returns every work location. Requires authentication — this was
     slice 1 code, written before auth existed in slice 2, and nothing
@@ -21,7 +25,15 @@ def list_work_locations(_employee: Employee = Depends(current_user)) -> list[Wor
     return service.list_work_locations()
 
 
-@router.get("/{location_id}", response_model=WorkLocationOut)
+@router.get(
+    "/{location_id}",
+    response_model=WorkLocationOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        410: {"description": "No work location with this id."},
+        422: {"description": "location_id is not an integer."},
+    },
+)
 def get_work_location(location_id: int, _employee: Employee = Depends(current_user)) -> WorkLocationOut:
     """Returns a single work location by id.
 

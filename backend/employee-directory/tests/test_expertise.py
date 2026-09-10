@@ -7,7 +7,7 @@ from app.main import app
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 
 
 def _ceo_headers() -> dict:
@@ -24,8 +24,11 @@ def test_list_expertise_requires_authentication() -> None:
 
 
 def test_list_expertise_returns_seeded_values() -> None:
-    """All four seeded expertise values come back."""
+    """All six seeded expertise values come back — four from the
+    original slice 1 seed, plus Sales/Data added in the final-pass seed
+    rewrite.
+    """
     response = client.get("/expertise", headers=_ceo_headers())
     assert response.status_code == 200
     names = {row["name"] for row in response.json()}
-    assert names == {"Backend", "Frontend", "DevOps", "Support"}
+    assert names == {"Backend", "Frontend", "DevOps", "Support", "Sales", "Data"}

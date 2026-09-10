@@ -14,7 +14,11 @@ from app.services import project_service, skill_service
 router = APIRouter(prefix="/employees", tags=["employees"])
 
 
-@router.get("", response_model=list[EmployeeOut])
+@router.get(
+    "",
+    response_model=list[EmployeeOut],
+    responses={401: {"description": "Not authenticated."}},
+)
 def list_employees(
     q: str | None = Query(default=None),
     location_id: int | None = Query(default=None),
@@ -43,25 +47,62 @@ def list_employees(
     )
 
 
-@router.get("/{employee_id}", response_model=EmployeeOut)
+@router.get(
+    "/{employee_id}",
+    response_model=EmployeeOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        410: {"description": "No employee with this id."},
+    },
+)
 def get_employee(employee_id: int, _employee: Employee = Depends(current_user)) -> EmployeeOut:
     """Any authenticated employee can look up an employee by id."""
     return service.get_employee(employee_id)
 
 
-@router.get("/{employee_id}/reports", response_model=list[EmployeeOut])
+@router.get(
+    "/{employee_id}/reports",
+    response_model=list[EmployeeOut],
+    responses={401: {"description": "Not authenticated."}},
+)
 def get_reports(employee_id: int, _employee: Employee = Depends(current_user)) -> list[EmployeeOut]:
     """Direct reports — everyone whose manager_id is this id."""
     return service.get_reports(employee_id)
 
 
-@router.post("", response_model=EmployeeOut, status_code=201)
+@router.post(
+    "",
+    response_model=EmployeeOut,
+    status_code=201,
+    responses={
+        201: {"description": "Created."},
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't Admin (literally Admin — not CEO-or-Admin)."},
+        409: {"description": "An employee with this email (any case) already exists."},
+        422: {"description": "A field failed validation (e.g. empty name, role other than EMPLOYEE/ADMIN — "
+              "MANAGER/CEO are never directly settable, see the teams README section), or work_location_id/"
+              "expertise_id doesn't reference an existing row (field named in the response)."},
+    },
+)
 def create_employee(body: EmployeeCreate, _employee: Employee = Depends(require_role(Role.ADMIN))) -> EmployeeOut:
     """Admin only — literally: not CEO-or-Admin, Admin."""
     return service.create_employee(body)
 
 
-@router.put("/{employee_id}", response_model=EmployeeOut)
+@router.put(
+    "/{employee_id}",
+    response_model=EmployeeOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't allowed to touch a field they submitted — see "
+              "employee_service.update_employee for the full self/manager/Admin split."},
+        409: {"description": "team_id was submitted for someone who currently manages an active team (use "
+              "PUT /teams instead), or a role change would leave an active team without its manager."},
+        410: {"description": "No employee with this id, or (for team_id) no team with that id."},
+        422: {"description": "A field failed validation, or team_id names a team that exists but is inactive "
+              "(field named in the response)."},
+    },
+)
 def update_employee(employee_id: int, body: EmployeeUpdate, actor: Employee = Depends(current_user)) -> EmployeeOut:
     """Self edits their own first_name/last_name/phone; Admin edits
     role (for anyone, including themselves). See
@@ -70,7 +111,17 @@ def update_employee(employee_id: int, body: EmployeeUpdate, actor: Employee = De
     return service.update_employee(actor, employee_id, body)
 
 
-@router.delete("/{employee_id}", response_model=EmployeeOut)
+@router.delete(
+    "/{employee_id}",
+    response_model=EmployeeOut,
+    responses={
+        401: {"description": "Not authenticated."},
+        403: {"description": "Caller isn't Admin."},
+        409: {"description": "The employee is the CEO, is the last active Admin, or has active direct "
+              "reports."},
+        410: {"description": "No employee with this id."},
+    },
+)
 def delete_employee(employee_id: int, _employee: Employee = Depends(require_role(Role.ADMIN))) -> EmployeeOut:
     """Admin only. Idempotent; blocked by the CEO, the last active
     Admin, or active direct reports.

@@ -46,8 +46,10 @@ def test_migration_is_idempotent_when_run_twice_in_one_process() -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM work_locations WHERE name = 'Remote'")
         assert cur.fetchone()[0] == 1
+        # 6, not 4 — the final-pass seed rewrite added Sales/Data
+        # alongside the original Backend/Frontend/DevOps/Support.
         cur.execute("SELECT count(*) FROM expertise")
-        assert cur.fetchone()[0] == 4
+        assert cur.fetchone()[0] == 6
 
 
 def test_connection_survives_a_rolled_back_transaction() -> None:

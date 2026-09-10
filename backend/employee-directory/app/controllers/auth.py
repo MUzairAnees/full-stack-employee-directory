@@ -10,7 +10,15 @@ from app.services.auth_service import AuthenticationError, authenticate
 router = APIRouter(tags=["auth"])
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    responses={
+        401: {"description": "Invalid email or password — unknown email, wrong password, and a deactivated "
+              "account are all indistinguishable on purpose, same body and status for all three."},
+        422: {"description": "Request body missing email or password."},
+    },
+)
 def login(body: LoginRequest) -> TokenResponse:
     """Authenticates and returns a signed JWT.
 
@@ -26,7 +34,14 @@ def login(body: LoginRequest) -> TokenResponse:
     return TokenResponse(access_token=token)
 
 
-@router.get("/me", response_model=CurrentUserOut)
+@router.get(
+    "/me",
+    response_model=CurrentUserOut,
+    responses={
+        401: {"description": "Missing/malformed/expired/tampered token, or the account has since been "
+              "deactivated — current_user re-reads is_active on every call."},
+    },
+)
 def me(employee: Employee = Depends(current_user)) -> CurrentUserOut:
     """Returns the authenticated employee's basic info."""
     return CurrentUserOut(

@@ -10,7 +10,11 @@ from app.services import expertise_service as service
 router = APIRouter(prefix="/expertise", tags=["expertise"])
 
 
-@router.get("", response_model=list[ExpertiseOut])
+@router.get(
+    "",
+    response_model=list[ExpertiseOut],
+    responses={401: {"description": "Not authenticated."}},
+)
 def list_expertise(_employee: Employee = Depends(current_user)) -> list[ExpertiseOut]:
     """Returns every expertise value. Requires authentication — same gap
     and same fix as /work-locations (see that controller's docstring):

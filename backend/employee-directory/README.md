@@ -449,15 +449,89 @@ following from there being no historical team-assignment record:
 Neither is fixable without a real assignment-history table, which is a
 bigger change than this slice's scope.
 
+## Final pass: a real-looking directory
+
+### The seed rewrite
+
+`seed.sql` went from three bootstrap accounts to 24 employees / 7 teams /
+3 departments — a directory shaped like a real company (per the
+original brief's org chart: HR, IT with Backend/Frontend/DevOps/Support,
+Marketing with Sales/Data), not a handful of accounts proving the wiring
+works. `ceo@example.com`/`admin@example.com`/`deactivated@example.com`
+are REUSED, not recreated — Aurora and local already held those three
+rows, and inserting a second CEO anywhere in this file would hit
+`idx_employees_one_active_ceo` and fail the migration at cold start
+against Aurora. Checked local Postgres for exactly one active CEO before
+writing a single CEO row into this file, same discipline as every prior
+index/constraint change.
+
+Mechanics: every employee is inserted with `team_id`/`manager_id` both
+NULL; teams are created next (each needs its manager to already exist as
+an employee row, which is why employees come first); `team_id` is set in
+one `UPDATE` per team; `manager_id` is derived last, in ONE `CASE`
+statement over every employee, mirroring
+`employee_repository.compute_manager_id` exactly. Password reconciliation
+is uniform across all 24 rows — `ON CONFLICT (email) DO UPDATE SET
+password_hash = EXCLUDED.password_hash`, nothing else — not split
+between "existing" and "new": one rule, and it means the README's
+documented passwords are always the database's passwords on every cold
+start, not a value that can drift after a demo where a name got edited.
+
+`scripts/gen_demo_hashes.py` (committed) generates every hash pasted into
+this file — reproducible from a real source, not a magic string nobody
+could regenerate. `rounds=10`, matching `app.config.BCRYPT_ROUNDS`
+exactly — not the higher cost tried and reverted in slice 2.
+
+A test (`tests/test_zz_seed_baseline.py`) asserts the org-chart
+invariants hold across all 24 seeded rows and the exact baseline counts
+(24/7/3/12/7/4/6) — added, not preserved: no such assertion existed
+before this pass, the baseline had been checked by hand each slice. At
+this volume a two-row leak isn't eyeballable the way "back to 3
+employees" was, so it has to be a test now, not a habit.
+
+### Manager team moves: release-then-place, not a direct move
+
+The brief describes managers updating "IC team, dept" — read literally,
+that could mean a manager moves a team member directly to a *different*
+team. That's not built, deliberately: setting `team_id` to another team
+means writing into a team the manager doesn't manage, which is exactly
+the kind of cross-team write `PUT /employees`'s manager permissions
+don't allow (see the slice 5 section above). The effect is still fully
+achievable — the manager releases the member (`team_id` -> `null`), then
+Admin places them onto the new team — just as two actions across two
+roles, not one. Documented here as a deliberate scope boundary so it
+reads as a stated choice, not an unmet requirement.
+
+### `ILIKE` search as a documented trade-off
+
+`GET /employees?q=` matches `first_name`/`last_name`/`email` via `ILIKE
+'%...%'` — a leading wildcard, so it can't use a plain B-tree index and
+scans every row. Fine, deliberately, at this data volume (24 employees,
+low hundreds at most for a workshop directory) — a trigram index
+(`pg_trgm`) or a real search engine would be the answer at a volume where
+it matters, and isn't warranted here. Asked for in writing at kickoff;
+recording it now that it's worth stating rather than assuming.
+
 ## Demo credentials (bootstrap accounts)
 
 `seed.sql` stores password hashes, not plaintext, so the plaintext has to
-be written down somewhere for the demo to actually be usable. All three
-accounts share one password for simplicity. These are **demo accounts
-only**, not real credentials:
+be written down somewhere for the demo to actually be usable. Four
+accounts get DISTINCT passwords — these are the ones used to demo the
+four permission perspectives in one walkthrough. The manager and IC
+picked are on the SAME team (Backend), so those two logins alone
+demonstrate both "manager edits own team member" and the 403 on a
+different team, not just the success case. The other twenty seeded
+employees share one password; nobody logs in as them directly. These are
+**demo accounts only**, not real credentials:
 
-| Role  | Email | Password | Notes |
-| ----- | ----- | -------- | ----- |
-| CEO   | `ceo@example.com` | `Password123!` | |
-| Admin | `admin@example.com` | `Password123!` | |
-| Employee | `deactivated@example.com` | `Password123!` | `is_active = false` on purpose — login always fails. Exists so "deactivated account can't log in" is testable against a real seeded row on both local and AWS, not just a local-only test fixture. |
+| Role | Name | Email | Password |
+| ---- | ---- | ----- | -------- |
+| CEO | Demo CEO | `ceo@example.com` | `ceo1234` |
+| Admin | Demo Admin | `admin@example.com` | `admin1234` |
+| Manager (Backend team) | Marcus Chen | `backend.manager@example.com` | `manager1234` |
+| Employee (Backend team) | Ava Patel | `ava.patel@example.com` | `employee1234` |
+
+The other twenty employees (including `deactivated@example.com`, whose
+`is_active = false` means no password lets it log in — exists so
+"deactivated account can't log in" is testable against a real seeded row
+on both local and AWS) share the password `team1234`.

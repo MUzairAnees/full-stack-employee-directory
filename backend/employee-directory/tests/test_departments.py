@@ -12,9 +12,9 @@ from conftest import hard_delete_departments
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 _ADMIN_EMAIL = "admin@example.com"
-_ADMIN_PASSWORD = "Password123!"
+_ADMIN_PASSWORD = "admin1234"
 
 
 def _token_for(email: str, password: str) -> str:

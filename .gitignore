@@ -250,6 +250,7 @@ frontend/node_modules/
 backend/employee-directory/*
 !backend/employee-directory/app/
 !backend/employee-directory/tests/
+!backend/employee-directory/scripts/
 !backend/employee-directory/function.py
 !backend/employee-directory/requirements.txt
 !backend/employee-directory/requirements-dev.txt

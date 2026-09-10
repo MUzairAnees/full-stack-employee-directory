@@ -19,9 +19,9 @@ from conftest import hard_delete_departments, hard_delete_employees, hard_delete
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 _ADMIN_EMAIL = "admin@example.com"
-_ADMIN_PASSWORD = "Password123!"
+_ADMIN_PASSWORD = "admin1234"
 _TEST_PASSWORD = "test-password-123"
 
 

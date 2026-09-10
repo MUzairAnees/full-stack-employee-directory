@@ -43,9 +43,9 @@ from pathlib import Path
 _JWT_SECRET_FALLBACK = "dev-placeholder-not-a-real-secret"
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 _DEACTIVATED_EMAIL = "deactivated@example.com"
-_DEACTIVATED_PASSWORD = "Password123!"
+_DEACTIVATED_PASSWORD = "team1234"
 
 _SECRETS_TO_MASK: list[str] = [_CEO_PASSWORD]  # tokens are added as minted
 
@@ -342,7 +342,9 @@ def check_expertise_list(t: SmokeTest) -> str:
     t.record_response("expertise_list", raw)
     assert status == 200, f"expected 200, got {status}: {raw}"
     rows = json.loads(raw)
-    assert len(rows) == 4, f"expected 4 expertise rows, got {len(rows)}: {raw}"
+    # 6, not 4 — the final-pass seed rewrite added Sales/Data alongside
+    # the original Backend/Frontend/DevOps/Support.
+    assert len(rows) == 6, f"expected 6 expertise rows, got {len(rows)}: {raw}"
     return f"{len(rows)} row(s)"
 
 
@@ -561,7 +563,7 @@ def main() -> int:
     t.run("6. GET /work-locations/{real id} -> 200", lambda: check_work_location_get_by_id(t))
     t.run("7. GET /work-locations/999999 -> 410, JSON, real body", lambda: check_work_location_410(t))
     t.run("8. GET /work-locations/abc -> 422", lambda: check_work_location_422(t))
-    t.run("9. GET /expertise -> 200, 4 rows", lambda: check_expertise_list(t))
+    t.run("9. GET /expertise -> 200, 6 rows", lambda: check_expertise_list(t))
     t.run("10. GET /work-locations no Authorization header -> 401", lambda: check_work_locations_requires_authentication(t))
     t.run("11. Public endpoint (/health) ignores a garbage Authorization header", lambda: check_public_endpoint_ignores_garbage_auth_header(t))
 

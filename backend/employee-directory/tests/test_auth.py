@@ -27,11 +27,11 @@ from app.services.auth_service import _JWT_ALGORITHM, _JWT_SECRET
 client = TestClient(app)
 
 _CEO_EMAIL = "ceo@example.com"
-_CEO_PASSWORD = "Password123!"
+_CEO_PASSWORD = "ceo1234"
 # Same permanently-seeded account seed.sql defines, so this test needs no
 # database writes of its own and this password works against AWS too.
 _DEACTIVATED_EMAIL = "deactivated@example.com"
-_DEACTIVATED_PASSWORD = "Password123!"
+_DEACTIVATED_PASSWORD = "team1234"
 
 
 def test_login_succeeds_with_correct_credentials() -> None:
