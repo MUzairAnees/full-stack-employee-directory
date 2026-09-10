@@ -154,3 +154,40 @@ def test_login_is_case_insensitive_on_email() -> None:
     response = client.post("/login", json={"email": _CEO_EMAIL.upper(), "password": _CEO_PASSWORD})
     assert response.status_code == 200
     assert "access_token" in response.json()
+
+
+def test_login_finds_a_mixed_case_stored_email() -> None:
+    """The test above only varies the INPUT case against an
+    already-lowercase seeded row - that passes even with a plain
+    `WHERE email = %s` lookup, since auth_service lowercases input
+    before querying and every seeded email happens to already be
+    lowercase. It never actually distinguishes `email = %s` from
+    `LOWER(email) = %s`.
+
+    This one does: it stores a row with mixed case directly (no
+    employee-create endpoint exists yet to normalize on write, so this
+    simulates one that slipped through) and proves login still finds it.
+    Under a plain `email = %s` lookup this row would be UNREACHABLE -
+    permanently unable to log in, no error explaining why.
+    """
+    email_mixed_case = "MixedCase.User@Example.com"
+    password = "test-password-123"
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
+
+    conn = db.get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO employees (first_name, last_name, email, password_hash, role,
+                work_location_id, expertise_id, is_active)
+            VALUES ('Mixed', 'Case', %s, %s, 'EMPLOYEE',
+                (SELECT id FROM work_locations WHERE name = 'Remote'),
+                (SELECT id FROM expertise WHERE name = 'Backend'), true)
+            ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true
+            """,
+            (email_mixed_case, password_hash),
+        )
+
+    response = client.post("/login", json={"email": email_mixed_case.lower(), "password": password})
+    assert response.status_code == 200
+    assert "access_token" in response.json()

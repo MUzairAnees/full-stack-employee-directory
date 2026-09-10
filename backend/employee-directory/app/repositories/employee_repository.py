@@ -16,10 +16,21 @@ def get_employee_by_email(email: str) -> Employee | None:
     email" apart from other conditions itself, on the way to giving an
     identical, generic 401 regardless of which one it was (see
     auth_service.authenticate).
+
+    Matches on LOWER(email), not email — deliberately, and matching
+    schema.sql's idx_employees_email_lower index (which this query now
+    actually uses, not just benefits from indirectly). auth_service
+    already lowercases the input before calling this, so today the two
+    forms behave identically; the difference only matters for a row
+    that's ever stored with mixed case. With a plain `email = %s`, that
+    row would be UNREACHABLE — permanently unable to log in, no error
+    explaining why — rather than just inconsistent. LOWER(email) finds
+    it regardless of how it was stored, which is the whole point of
+    normalizing being cheap insurance rather than a strict guarantee.
     """
     conn = get_connection()
     with conn.cursor(row_factory=class_row(Employee)) as cur:
-        cur.execute(f"SELECT {_COLUMNS} FROM employees WHERE email = %s", (email,))
+        cur.execute(f"SELECT {_COLUMNS} FROM employees WHERE LOWER(email) = %s", (email,))
         return cur.fetchone()
 
 
