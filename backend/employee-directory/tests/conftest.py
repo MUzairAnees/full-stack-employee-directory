@@ -55,13 +55,31 @@ def hard_delete_employees(conn, employee_ids: list[int]) -> None:
     clause — RESTRICT by default), so an employee in this set who is
     another employee in this set's manager_id would block the DELETE.
     Cleared first, safe regardless of what order the ids were created
-    in or what pointed at what.
+    in or what pointed at what. Also clears any employee_skills rows for
+    these employees (slice 6) — same RESTRICT-by-default reasoning;
+    leaves the skills rows themselves alone (pair with hard_delete_skills
+    for those, when a test also created skill rows to clean up).
     """
     if not employee_ids:
         return
     with conn.cursor() as cur:
         cur.execute("UPDATE employees SET manager_id = NULL WHERE manager_id = ANY(%s)", (employee_ids,))
+        cur.execute("DELETE FROM employee_skills WHERE employee_id = ANY(%s)", (employee_ids,))
         cur.execute("DELETE FROM employees WHERE id = ANY(%s)", (employee_ids,))
+
+
+def hard_delete_skills(conn, skill_ids: list[int]) -> None:
+    """Hard-deletes skills by id — test teardown only; there is no
+    user-facing delete for skills at all, attach/detach only ever touch
+    the employee_skills join. Clears any employee_skills rows
+    referencing these skills first (skills.id has no ON DELETE clause,
+    RESTRICT by default).
+    """
+    if not skill_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM employee_skills WHERE skill_id = ANY(%s)", (skill_ids,))
+        cur.execute("DELETE FROM skills WHERE id = ANY(%s)", (skill_ids,))
 
 
 def make_function_url_event(raw_path: str) -> dict:

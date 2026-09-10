@@ -327,3 +327,16 @@ export async function listTeams() {
   }
   return response.json();
 }
+
+/**
+ * Lists skills — the shared lookup list.
+ *
+ * @returns {Promise<Array<{id: number, name: string}>>}
+ */
+export async function listSkills() {
+  const response = await authFetch('/skills');
+  if (!response.ok) {
+    throw classifyError(response);
+  }
+  return response.json();
+}

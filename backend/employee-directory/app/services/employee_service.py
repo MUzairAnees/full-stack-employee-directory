@@ -18,6 +18,7 @@ def list_employees(
     manager_id: int | None = None,
     team_id: int | None = None,
     department_id: int | None = None,
+    skill_id: int | None = None,
     available: bool | None = None,
     include_inactive: bool = False,
 ) -> list[Employee]:
@@ -28,9 +29,34 @@ def list_employees(
         manager_id=manager_id,
         team_id=team_id,
         department_id=department_id,
+        skill_id=skill_id,
         available=available,
         include_inactive=include_inactive,
     )
+
+
+def authorization_context(actor: Employee, target: Employee) -> tuple[bool, bool, bool]:
+    """Returns (is_self, is_admin, is_manager_of_target) — the same
+    three-way split every field-family check in update_employee below is
+    built from, and (as of slice 6) skill_service's attach/detach
+    authorization too. Promoted here rather than duplicated, same
+    reasoning as compute_manager_id/get_ceo_id in slice 5.
+
+    "manager of target" is checked against the TARGET's CURRENT team_id,
+    as the caller already fetched it — not before-or-after: the CEO has
+    team_id NULL, so an after-the-fact check would let a manager claim
+    the CEO onto their team and then edit them. A manager checking
+    against THEMSELVES as target correctly returns True too — not a
+    special case, see employee_repository.compute_manager_id/
+    team_repository for why a manager's own team_id always equals the
+    team they manage.
+    """
+    is_self = actor.id == target.id
+    is_admin = actor.role == Role.ADMIN
+    is_manager_of_target = (
+        actor.role == Role.MANAGER and actor.team_id is not None and actor.team_id == target.team_id
+    )
+    return is_self, is_admin, is_manager_of_target
 
 
 def get_employee(employee_id: int) -> Employee:
@@ -87,15 +113,10 @@ def update_employee(actor: Employee, target_id: int, update: EmployeeUpdate) -> 
                                                      real value is
                                                      Admin-only)
 
-    "manager of this employee's team" is checked against the TARGET's
-    team_id as fetched here, at the top, BEFORE any change — not
-    before-or-after: the CEO has team_id NULL, so an after-the-fact
-    check would let a manager claim the CEO onto their team and then
-    edit them. A manager editing THEMSELVES also satisfies this check
-    (their own team_id equals the team they manage), which is intended,
-    not a special case — see employee_repository.compute_manager_id and
-    team_repository for why a manager's team_id is always their managed
-    team's id.
+    "manager of this employee's team" is authorization_context() above —
+    see its docstring for why it's checked against the target's CURRENT
+    team_id, before any change, and why a manager editing themselves
+    correctly counts too.
 
     The team_id LOCK (an employee who currently manages an active team
     can't have team_id touched by anyone, Admin included) lives in
@@ -109,11 +130,7 @@ def update_employee(actor: Employee, target_id: int, update: EmployeeUpdate) -> 
             field(s) they submitted.
     """
     target = repo.get_employee(target_id)
-    is_self = actor.id == target.id
-    is_admin = actor.role == Role.ADMIN
-    is_manager_of_target = (
-        actor.role == Role.MANAGER and actor.team_id is not None and actor.team_id == target.team_id
-    )
+    is_self, is_admin, is_manager_of_target = authorization_context(actor, target)
 
     fields_set = update.model_fields_set
 

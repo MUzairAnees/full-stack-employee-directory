@@ -143,3 +143,13 @@ CREATE INDEX IF NOT EXISTS idx_teams_manager_id ON teams(manager_id);
 CREATE INDEX IF NOT EXISTS idx_employee_skills_skill_id ON employee_skills(skill_id);
 CREATE INDEX IF NOT EXISTS idx_employee_projects_project_id ON employee_projects(project_id);
 CREATE INDEX IF NOT EXISTS idx_employee_projects_completed_at ON employee_projects(completed_at);
+
+-- Case-insensitive skill-name uniqueness, same relationship to skills'
+-- existing plain UNIQUE(name) as idx_employees_email_lower has to
+-- employees.email UNIQUE: the plain constraint stops "Python"/"Python"
+-- but not "Python"/"python" — two rows a get-or-create lookup by
+-- LOWER(name) would otherwise conflate. Checked local Postgres for
+-- existing case-duplicate skill names before adding it (0 rows in
+-- skills at all — nothing writes to it yet — so trivially clean), same
+-- discipline as every prior index in this file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_name_lower ON skills (LOWER(name));

@@ -154,7 +154,9 @@ on whether `infra/` could be touched. Confirmed with the workshop:
 
 `manager_id` is never accepted as input on any request — not on create,
 not on update, not from an Admin, not even for a CEO submitting for
-themselves. It's computed by one helper (`employee_repository._compute_manager_id`),
+themselves. It's computed by one helper (`employee_repository.compute_manager_id` —
+promoted from `_compute_manager_id` in slice 5, once `team_repository`
+needed the same derivation),
 called from every write path that touches `team_id` or `role`:
 
 ```
@@ -248,6 +250,154 @@ The `LOWER(email)` unique index (slice 3) stops two rows differing only
 by case; it does nothing to stop *one* row being stored mixed-case in
 the first place, which the case-insensitive lookup could then still fail
 to find. A duplicate email, including a case variant, is a 409.
+
+## Slice 5: teams
+
+Added retroactively — this section didn't get written when the slice
+landed; caught while keeping the README current for slice 6 (see the
+"OpenAPI schema as Figma input" note below on why that now matters more
+than it used to).
+
+### MANAGER is conferred by team assignment, and by nothing else
+
+`POST`/`PUT /employees` restrict `role` to `Literal[EMPLOYEE, ADMIN]` —
+MANAGER and CEO are both rejected at the schema layer. There is no
+direct promotion and no direct demotion: MANAGER only ever comes from
+`POST /teams` (nominating someone) or `PUT /teams` (replacing a team's
+manager), and only ever goes away via `PUT /teams` replacement,
+`DELETE /teams`, or deactivating the manager through `DELETE /employees`.
+A MANAGER can no longer exist without an active team.
+
+### Team creation, replacement, and deletion are atomic
+
+`POST /teams` inserts the team and promotes the nominee (role, team_id,
+manager_id) in one transaction. `PUT /teams` manager replacement demotes
+the outgoing manager (who stays on the team as an IC), promotes the
+incoming one, and bulk-repoints everyone else's `manager_id` — one
+`UPDATE`, not a per-row loop — all in one transaction. `DELETE /teams`
+deactivates the team and pools its manager (`team_id` NULL, role
+EMPLOYEE, `manager_id` the CEO) together.
+
+These are this codebase's first genuinely multi-statement, atomic
+writes. `app/repositories/db.py` connects with `autocommit=True`, so
+every write before slice 5 was a single statement, atomic on its own by
+construction. `with conn.transaction():` (psycopg3) is what makes a
+multi-statement operation atomic under autocommit — it issues a real
+`BEGIN`, then commits on a clean exit or rolls back on any exception.
+Whether a rolled-back transaction leaves the module-level cached
+connection usable for the *next* request on the same warm Lambda
+container was proved, not assumed:
+`tests/test_db_connection.py::test_connection_survives_a_rolled_back_transaction`
+forces a real `UniqueViolation` inside a transaction block and confirms
+an ordinary statement succeeds immediately after, on the same connection
+object — `db.py`'s reset-on-failure only covers a failed `get_connection()`
+call itself, never a mid-request rollback.
+
+### The manager permission model
+
+On `PUT /employees/{id}`, a manager may edit `first_name`/`last_name`/
+`phone`/`work_location_id`/`project_availability`/`expertise_id` for
+members of their own team (scope checked against the target's `team_id`
+as fetched before any change — not before-or-after, since the CEO's
+`team_id` is NULL and an after-the-fact check would let a manager claim
+the CEO onto their team and then edit them), and release a member
+(`team_id` -> `null` only; placing a real value is Admin-only). Every
+field family is authorized independently and rejects (403) a caller who
+isn't allowed to touch it, rather than silently dropping the field.
+`team_id` is separately LOCKED for anyone who currently manages an
+active team, for every caller including Admin — the only path that
+moves a team's manager is `PUT /teams`. Authorization is always checked
+before this lock: a caller with no standing to touch `team_id` at all
+gets 403 for that reason, never a 409 revealing a business invariant
+that isn't theirs to trip.
+
+### Four new invariants
+
+1. At most one active team per manager
+   (`idx_teams_one_active_manager`), backing the app-level
+   "already manages another active team" check with a real constraint —
+   closing the TOCTOU race the app-level check alone can't.
+2. The CEO can't be nominated or renominated as a manager (would leave
+   the app with zero CEOs — the single-CEO index only prevents two).
+3. Admin can't be nominated either without losing Admin access
+   invisibly (slice 4's "at least one Admin" guard only fires on
+   deactivation, never on a role change).
+4. Deactivating a manager whose team has no other active members also
+   deactivates that now-manager-less team, in the same transaction —
+   `teams.manager_id` is `NOT NULL` and can't point at an inactive
+   person.
+
+## Slice 6: skills
+
+### Get-or-create, and the insert race
+
+Attaching a skill by name looks it up case-insensitively
+(`idx_skills_name_lower`, additive to the existing plain
+`UNIQUE(name)` — same relationship the email-lowercase index has to
+`employees.email UNIQUE`) and creates it if missing. Two Lambda
+containers attaching "Python" at the same instant can both miss the
+initial `SELECT` and both attempt the `INSERT`; one wins, the other's
+`UniqueViolation` is caught and re-`SELECT`s to attach to whatever row
+is there now. The caller never sees an error for this — it's expected
+concurrent behaviour, not an edge case, and
+`tests/test_skills.py::test_get_or_create_skill_handles_the_insert_race`
+exercises the exact code path (a real `UniqueViolation`, forced
+deterministically rather than relying on true concurrency, which this
+codebase's single shared connection can't reproduce in-process).
+
+**Known, accepted limitation**: "JavaScript" and "JS" are different
+rows and are never merged automatically — only exact case-insensitive
+matches reuse a row. Already decided; this is the first slice where
+it's actually reachable rather than theoretical.
+
+### Idempotency, stated explicitly
+
+`POST /employees/{id}/skills` attaching a skill the employee already
+has is 200, not 409 — a POST that lands on the same end state succeeds
+quietly. `DELETE /employees/{id}/skills/{skill_id}` detaching a skill
+they don't have is also a clean 200 — `employee_skills` is a join row,
+not an entity, so there's no "not found" to report. Both endpoints
+return the employee's current skill list, not a single row or an empty
+body — consistent with this codebase's existing DELETE convention
+(departments/employees/teams all return post-change state), which
+matters more here than textbook REST purity (`204 No Content` would
+have been the strict answer). `POST` returns 201 whenever a *new*
+`employee_skills` link is created — regardless of whether the skill
+lookup row itself was also new — and 200 only when nothing changed.
+
+### Attaching to an inactive employee is rejected; detaching isn't
+
+`POST /employees/{id}/skills` on a deactivated employee is 409
+(`DependentsExistError`, message says "employee is inactive"
+explicitly). Attaching creates a *new* row, unlike editing an existing
+field, so there's a real case for "don't create new associations
+against an inactive record" here. `DELETE` has no such guard — removing
+data from an inactive record is never harmful.
+
+**Recorded, not fixed**: `PUT /employees/{id}` has no equivalent
+`is_active` guard at all — an Admin (or a manager, or self) can
+currently edit any field on a deactivated employee's row with nothing
+blocking it. A real inconsistency with the rule above, deliberately left
+open as a design question for a later slice (should an inactive
+employee be frozen except for reactivation, the way departments are?) —
+not slice 6 scope.
+
+### Frontend
+
+Per-employee skills display deferred; the Skills lookup page and
+underlying API are complete and testable via the endpoints directly.
+
+### OpenAPI schema as later Figma input
+
+Starting this slice, every endpoint's `responses={...}` is kept accurate
+for every status code it can actually return, and schema field names
+stay consistent across resources — not just a nicety anymore. The React
+pages built so far (WorkLocations, Departments, Employees, Teams,
+Skills) are scaffolding proving the authenticated fetch path through
+CloudFront each slice, not the real frontend; the real one is built
+later in Figma from a metaprompt derived from the finished backend +
+this README, so `/openapi.json` becomes literal input to that process,
+not just documentation for us.
 
 ## Demo credentials (bootstrap accounts)
 
