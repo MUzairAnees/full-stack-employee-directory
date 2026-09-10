@@ -19,6 +19,21 @@ class DuplicateError(Exception):
 
 
 class DependentsExistError(Exception):
-    """Raised when a delete is blocked because active records still
-    depend on the one being deleted.
+    """Raised when a delete/deactivate is blocked — either because active
+    records still depend on the one being deactivated (e.g. direct
+    reports, or a department's active employees), or because doing so
+    would violate a system invariant (the CEO can never be deactivated;
+    at least one active Admin must always remain).
     """
+
+
+class InvalidReferenceError(Exception):
+    """Raised when a foreign key reference doesn't exist. Names the
+    specific field — employees have four FK columns
+    (work_location_id/team_id/manager_id/expertise_id), and "invalid
+    reference" alone doesn't tell the caller which one they got wrong.
+    """
+
+    def __init__(self, field: str, message: str) -> None:
+        self.field = field
+        super().__init__(message)

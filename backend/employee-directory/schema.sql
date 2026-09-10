@@ -109,6 +109,16 @@ CREATE TABLE IF NOT EXISTS employee_projects (
 -- not silently worked around here.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_email_lower ON employees (LOWER(email));
 
+-- At most one active CEO. All qualifying rows share the same role value
+-- ('CEO'), so uniqueness on that column, restricted to this partial
+-- condition, means at most one row can satisfy it simultaneously —
+-- the standard Postgres idiom for "exactly one of X". Checked local
+-- Postgres for existing active-CEO count before adding this (1, the
+-- seeded row) — same precaution as idx_employees_email_lower above; a
+-- failed index creation inside cold-start migration is a bad way to
+-- find out there were already two.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_one_active_ceo ON employees (role) WHERE role = 'CEO' AND is_active;
+
 CREATE INDEX IF NOT EXISTS idx_employees_team_id ON employees(team_id);
 CREATE INDEX IF NOT EXISTS idx_employees_manager_id ON employees(manager_id);
 CREATE INDEX IF NOT EXISTS idx_employees_work_location_id ON employees(work_location_id);

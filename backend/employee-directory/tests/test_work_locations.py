@@ -10,12 +10,28 @@ from function import handler
 
 client = TestClient(app)
 
+_CEO_EMAIL = "ceo@example.com"
+_CEO_PASSWORD = "Password123!"
+
+
+def _ceo_headers() -> dict:
+    token = client.post("/login", json={"email": _CEO_EMAIL, "password": _CEO_PASSWORD}).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_list_work_locations_requires_authentication() -> None:
+    """Slice 4 guard: this endpoint had no auth dependency at all since
+    slice 1 — a stranger with the CloudFront URL could curl it with no
+    token. Fixed; this pins it so it can't silently regress.
+    """
+    assert client.get("/work-locations").status_code == 401
+
 
 def test_list_work_locations_includes_seeded_remote() -> None:
     """The seeded 'Remote' location comes back through the full stack:
     migration -> repository -> service -> schema -> controller.
     """
-    response = client.get("/work-locations")
+    response = client.get("/work-locations", headers=_ceo_headers())
     assert response.status_code == 200
     names = [location["name"] for location in response.json()]
     assert "Remote" in names
@@ -26,10 +42,17 @@ def test_work_locations_path_prefix_both_shapes_resolve_the_same() -> None:
     endpoint, not just /health: CloudFront forwards the full,
     "/api/employee-directory"-prefixed path unstripped, while the local
     proxy strips it before the Lambda ever sees the request. Both must
-    resolve to the same 200 with the same body.
+    resolve to the same 200 with the same body. Needs a real token now
+    that this endpoint requires authentication.
     """
-    prefixed = handler(make_function_url_event("/api/employee-directory/work-locations"), None)
-    unprefixed = handler(make_function_url_event("/work-locations"), None)
+    headers = {"Authorization": _ceo_headers()["Authorization"]}
+    prefixed_event = make_function_url_event("/api/employee-directory/work-locations")
+    prefixed_event["headers"]["authorization"] = headers["Authorization"]
+    unprefixed_event = make_function_url_event("/work-locations")
+    unprefixed_event["headers"]["authorization"] = headers["Authorization"]
+
+    prefixed = handler(prefixed_event, None)
+    unprefixed = handler(unprefixed_event, None)
 
     assert prefixed["statusCode"] == 200
     assert unprefixed["statusCode"] == 200
@@ -38,10 +61,11 @@ def test_work_locations_path_prefix_both_shapes_resolve_the_same() -> None:
 
 def test_get_work_location_returns_200_for_a_real_id() -> None:
     """A real, existing id round-trips correctly through get-by-id."""
-    listed = client.get("/work-locations").json()
+    headers = _ceo_headers()
+    listed = client.get("/work-locations", headers=headers).json()
     remote_id = next(loc["id"] for loc in listed if loc["name"] == "Remote")
 
-    response = client.get(f"/work-locations/{remote_id}")
+    response = client.get(f"/work-locations/{remote_id}", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["name"] == "Remote"
@@ -60,7 +84,7 @@ def test_get_work_location_410_for_unknown_id() -> None:
     through to a real client — confirmed manually against the deployed
     CloudFront URL, not just here against the app directly.
     """
-    response = client.get("/work-locations/999999")
+    response = client.get("/work-locations/999999", headers=_ceo_headers())
     assert response.status_code == 410
     assert "detail" in response.json()
 
@@ -69,7 +93,7 @@ def test_get_work_location_non_integer_id_returns_422_not_500() -> None:
     """FastAPI's path-parameter type validation rejects a non-integer id
     before it ever reaches our code — proving that, not just assuming it.
     """
-    response = client.get("/work-locations/abc")
+    response = client.get("/work-locations/abc", headers=_ceo_headers())
     assert response.status_code == 422
 
 
@@ -79,7 +103,8 @@ def test_remote_serialises_with_null_address_fields_present() -> None:
     the response — an omitted key looks like a schema bug to any client
     that checks `"city" in data` rather than `data["city"] is None`.
     """
-    listed = client.get("/work-locations").json()
+    headers = _ceo_headers()
+    listed = client.get("/work-locations", headers=headers).json()
     remote = next(loc for loc in listed if loc["name"] == "Remote")
 
     for field in ("address_line_1", "city", "state", "zip"):
@@ -97,7 +122,7 @@ def test_list_work_locations_returns_empty_list_not_410_when_nothing_matches(mon
 
     monkeypatch.setattr(service_module, "list_work_locations", lambda: [])
 
-    response = client.get("/work-locations")
+    response = client.get("/work-locations", headers=_ceo_headers())
 
     assert response.status_code == 200
     assert response.json() == []

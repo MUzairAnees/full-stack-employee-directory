@@ -20,8 +20,9 @@ import jwt
 from fastapi.testclient import TestClient
 
 import app.repositories.db as db
+from app.config import BCRYPT_ROUNDS
 from app.main import app
-from app.services.auth_service import _BCRYPT_ROUNDS, _JWT_ALGORITHM, _JWT_SECRET
+from app.services.auth_service import _JWT_ALGORITHM, _JWT_SECRET
 
 client = TestClient(app)
 
@@ -115,7 +116,7 @@ def test_deactivating_employee_immediately_invalidates_their_existing_token() ->
     """
     email = "temp-deactivation-test@example.com"
     password = "test-password-123"
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
 
     conn = db.get_connection()
     with conn.cursor() as cur:
@@ -172,7 +173,7 @@ def test_login_finds_a_mixed_case_stored_email() -> None:
     """
     email_mixed_case = "MixedCase.User@Example.com"
     password = "test-password-123"
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
 
     conn = db.get_connection()
     with conn.cursor() as cur:

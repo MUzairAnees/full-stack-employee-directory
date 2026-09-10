@@ -273,12 +273,14 @@ export async function getHealth() {
 }
 
 /**
- * Lists every work location.
+ * Lists every work location. Requires authentication — the backend
+ * closed a slice-1-era gap where this endpoint had no auth dependency
+ * (see backend README); this call follows that through authFetch now.
  *
  * @returns {Promise<Array<{id: number, name: string}>>} The work locations.
  */
 export async function listWorkLocations() {
-  const response = await apiFetch('/work-locations');
+  const response = await authFetch('/work-locations');
   if (!response.ok) {
     throw classifyError(response);
   }
@@ -286,14 +288,27 @@ export async function listWorkLocations() {
 }
 
 /**
- * Lists departments. Requires authentication (unlike work locations) —
- * goes through authFetch, so an expired/invalid token here triggers the
- * same session-expiry handling as any other authenticated call.
+ * Lists departments. Requires authentication — goes through authFetch,
+ * so an expired/invalid token here triggers the same session-expiry
+ * handling as any other authenticated call.
  *
  * @returns {Promise<Array<{id: number, name: string, is_active: boolean}>>}
  */
 export async function listDepartments() {
   const response = await authFetch('/departments');
+  if (!response.ok) {
+    throw classifyError(response);
+  }
+  return response.json();
+}
+
+/**
+ * Lists employees.
+ *
+ * @returns {Promise<Array<{id: number, first_name: string, last_name: string, role: string, is_active: boolean}>>}
+ */
+export async function listEmployees() {
+  const response = await authFetch('/employees');
   if (!response.ok) {
     throw classifyError(response);
   }

@@ -133,9 +133,11 @@ on whether `infra/` could be touched. Confirmed with the workshop:
   `memory_size` could be raised instead; `infra/` cannot be modified, so
   the cost factor was lowered instead: still ~1.1s on this hardware, and
   still at the [OWASP-recommended floor](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-  for bcrypt. `app/services/auth_service.py`'s `_BCRYPT_ROUNDS` is the
-  one place this lives; raising it back to 12 (or higher) is a one-line
-  change if more Lambda memory ever becomes available.
+  for bcrypt. `app/config.py`'s `BCRYPT_ROUNDS` is the one place this
+  lives (moved out of `auth_service` in slice 4, once employee creation
+  and the login dummy-hash both needed the same constant); raising it
+  back to 12 (or higher) is a one-line change if more Lambda memory ever
+  becomes available.
 - **The JWT signing secret is a documented placeholder, permanently.**
   `infra/locals.tf`'s `env_vars` map has no slot for a custom secret, and
   since `infra/` cannot be modified, there is no way to inject a real one
@@ -145,6 +147,107 @@ on whether `infra/` could be touched. Confirmed with the workshop:
   actual production secret here. In production this would come from
   Secrets Manager or Parameter Store, injected as a real environment
   variable, not hardcoded.
+
+## Slice 4: employees
+
+### The org chart is derived, not editable
+
+`manager_id` is never accepted as input on any request — not on create,
+not on update, not from an Admin, not even for a CEO submitting for
+themselves. It's computed by one helper (`employee_repository._compute_manager_id`),
+called from every write path that touches `team_id` or `role`:
+
+```
+role = CEO      -> manager_id = NULL       (and team_id = NULL)
+role = MANAGER  -> manager_id = the CEO's id
+anyone else     -> manager_id = their team's manager,
+                    or the CEO's id if they have no team (ADMIN included)
+```
+
+This makes a `manager_id` cycle structurally impossible — every chain is
+at most IC -> manager -> CEO — so the `manager_id != id` self-reference
+check that used to guard against a cycle is now unreachable and kept only
+as an internal `assert`, not a user-facing guard. Team assignment doesn't
+exist yet (slice 5), so every employee created this slice has `team_id =
+NULL` and therefore `manager_id` = the CEO's id, including newly-created
+MANAGERs — a MANAGER with no team yet is a legal, transient state, not a
+bug, on the way to slice 5's "CEO creates the team around them" flow.
+
+### Contact info, this slice: first name, last name, and phone
+
+`PUT /employees/{id}` is self-only and covers exactly three fields:
+`first_name`, `last_name`, and `phone`. Nothing else about "your own
+info" is editable through the API yet (email, work location, expertise,
+availability) — this is a stated scope decision for this slice, not
+something quietly missed.
+
+`phone` strips whitespace and stores an empty-after-strip value as `NULL`,
+not `""` — the same invisible-value bug fixed for names elsewhere, but in
+a column that can actually express "not set" (`first_name`/`last_name`
+can't: they're `NOT NULL`, so `min_length=1` is their fix instead).
+
+### Why an email change doesn't force a logout
+
+Considered and decided against. An email change is an administrative
+correction (nobody edits their own email this slice — email isn't in
+`EmployeeUpdate` at all), not a security event; the actual security
+action for a compromised or departing account is deactivation, and that
+is already immediate — `current_user` re-reads the employee row from the
+database on every request rather than trusting the JWT payload, so a
+deactivated employee's existing token stops working on their very next
+call, not just at natural expiry. Forcing every other token holder to
+re-authenticate over an email edit would be a bigger user-facing cost
+than the risk it addresses.
+
+### Four new invariants
+
+1. **Exactly one active CEO.** `CREATE UNIQUE INDEX IF NOT EXISTS
+   idx_employees_one_active_ceo ON employees (role) WHERE role = 'CEO'
+   AND is_active` (`schema.sql`). Checked Aurora for pre-existing active
+   CEOs before adding it, same precaution as the case-insensitive email
+   index in slice 3 — seed data has exactly one, so this was clean, but
+   confirmed rather than assumed.
+2. **At least one active Admin must always remain.** Enforced in
+   `soft_delete_employee` before a deactivation is allowed — covers both
+   the last Admin deactivating themselves and one Admin deactivating the
+   only other one. Without it: nobody could create employees, nobody
+   could reactivate anyone, and the CEO has no employee-management
+   powers to fix it — permanently stuck, no recovery path through the
+   API. Since `DELETE /employees/{id}` requires the ADMIN role, the only
+   reachable case in practice is "the last Admin deletes themselves" —
+   once the count is down to one, that one Admin is necessarily the only
+   caller who could still be authorized to try.
+3. **The CEO can never be deactivated.** Checked first, before the
+   Admin-count and active-reports guards, in `soft_delete_employee`.
+4. **A manager with active direct reports can't be deactivated.** Same
+   `EXISTS` shape as the department delete guard (slice 3). Otherwise a
+   manager could be deactivated leaving reports pointing at an inactive
+   person — a broken org chart, visible in the demo.
+
+A fifth guard is written but dormant this slice, same treatment as the
+department delete guard: rejecting a role change away from MANAGER for
+someone who currently manages an active team. No teams exist yet, so it
+can't fire; the positive case is a slice-5 test.
+
+### `/work-locations` and `/expertise` now require authentication
+
+Both were slice 1 code, written before auth existed in slice 2, and
+nothing went back to add the `current_user` dependency the other GETs
+use — until now. The data was never sensitive; the inconsistency (a
+stranger with the CloudFront URL could curl either one with no token)
+was the problem. `/expertise` wasn't explicitly named when this was
+scoped, but the identical gap and identical reasoning applied, so it was
+fixed alongside `/work-locations` rather than left inconsistent on a
+technicality.
+
+### Email is normalized on create, not just at login
+
+`POST /employees` strips and lowercases the submitted email before
+storing it, the same normalization `login` already applied to its input.
+The `LOWER(email)` unique index (slice 3) stops two rows differing only
+by case; it does nothing to stop *one* row being stored mixed-case in
+the first place, which the case-insensitive lookup could then still fail
+to find. A duplicate email, including a case variant, is a 409.
 
 ## Demo credentials (bootstrap accounts)
 

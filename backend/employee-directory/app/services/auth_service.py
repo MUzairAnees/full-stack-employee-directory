@@ -6,6 +6,7 @@ import time
 import bcrypt
 import jwt
 
+from app.config import BCRYPT_ROUNDS
 from app.models.employee import Employee
 from app.repositories import employee_repository as repo
 
@@ -19,24 +20,12 @@ _JWT_SECRET = os.environ.get("JWT_SECRET", "dev-placeholder-not-a-real-secret")
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TTL_SECONDS = 8 * 60 * 60  # 8h; no refresh flow this slice (known gap)
 
-# Same cost factor seed.sql's bootstrap hashes were generated with. Both
-# a real check and the dummy check below always cost the same because
-# they share this one constant, not by coincidence.
-#
-# Was 12; reduced to 10 (see README) — confirmed with the workshop that
-# infra/ is off-limits, so the provided Lambda's memory_size=128 (and the
-# CPU that comes with it) is fixed. Cost 12 measured ~4.5s per login on
-# that CPU allocation; cost 10 is still at the OWASP-recommended floor
-# and is a one-line change back up if more memory ever becomes available.
-_BCRYPT_ROUNDS = 10
-
 # Precomputed once at import, not per-request: an unknown email must
 # still pay for exactly one bcrypt.checkpw() against a hash of the same
-# cost factor as a real one, or the timing difference alone reveals which
-# emails are registered.
-_DUMMY_HASH = bcrypt.hashpw(
-    b"dummy-password-for-constant-time-auth", bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
-)
+# cost factor as a real one (app.config.BCRYPT_ROUNDS — one source, not
+# duplicated here), or the timing difference alone reveals which emails
+# are registered.
+_DUMMY_HASH = bcrypt.hashpw(b"dummy-password-for-constant-time-auth", bcrypt.gensalt(rounds=BCRYPT_ROUNDS))
 
 
 class AuthenticationError(Exception):

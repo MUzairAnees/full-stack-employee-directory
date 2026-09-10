@@ -37,7 +37,7 @@ from pathlib import Path
 # infra/locals.tf), so both fall back to this same constant — which is
 # what lets this script mint a validly-signed expired token without
 # knowing a "real" secret. If a per-environment secret is ever added,
-# check 19 (expired token) still correctly gets a 401 either way — just
+# check 20 (expired token) still correctly gets a 401 either way — just
 # via "bad signature" rather than "expired" — so it stays a valid check,
 # only slightly less precise about *why* it's a 401.
 _JWT_SECRET_FALLBACK = "dev-placeholder-not-a-real-secret"
@@ -110,10 +110,30 @@ def _terraform_output(key: str, target: str) -> dict | str:
     infra_dir = Path(__file__).resolve().parents[2] / "infra"
     env = os.environ.copy()
     if target == "local":
-        env.setdefault("AWS_ENDPOINT_URL", "http://localhost.localstack.cloud:4566")
-        env.setdefault("AWS_ACCESS_KEY_ID", "test")
-        env.setdefault("AWS_SECRET_ACCESS_KEY", "test")
-        env.setdefault("AWS_REGION", "us-east-1")
+        # FORCED, not setdefault: this VDI's own ~/.bashrc exports a real
+        # AWS_REGION (us-east-2, for the actual AWS deployment) globally,
+        # in every shell — setdefault would then be a silent no-op, and
+        # this subprocess would query the LocalStack S3 backend with the
+        # wrong region, coming back with "no outputs found" even right
+        # after a successful `./bin/deploy-backend.sh local`. Matches
+        # deploy-backend.sh's own unconditional `export` for these four
+        # vars in its local branch — not a coincidence, the same bug
+        # would hit terraform itself if it only setdefault'd here too.
+        env["AWS_ENDPOINT_URL"] = "http://localhost.localstack.cloud:4566"
+        # The generic AWS_ENDPOINT_URL alone isn't enough for the S3
+        # backend specifically — without this service-specific override
+        # too (same two vars bin/deploy-backend.sh's local branch sets),
+        # terraform's S3 backend resolves to a different, empty bucket
+        # address and `terraform output`/`state pull` silently succeeds
+        # with a fresh, empty state instead of erroring — no credentials
+        # or connectivity error, just no outputs. Confirmed empirically:
+        # `terraform state pull` was 146 bytes (an empty state) without
+        # this var, 53KB (the real state) with it.
+        env["AWS_ENDPOINT_URL_S3"] = "http://s3.localhost.localstack.cloud:4566"
+        env["AWS_ACCESS_KEY_ID"] = "test"
+        env["AWS_SECRET_ACCESS_KEY"] = "test"
+        env["AWS_REGION"] = "us-east-1"
+        env.pop("AWS_SESSION_TOKEN", None)
     try:
         result = subprocess.run(
             ["terraform", f"-chdir={infra_dir}", "output", "-json", key],
@@ -260,8 +280,18 @@ def check_path_prefix_both_shapes(t: SmokeTest) -> None:
     assert json.loads(unprefixed_raw) == json.loads(prefixed_raw), "both shapes must return the same body"
 
 
+def _auth_headers(t: SmokeTest) -> dict:
+    token = t.state.get("token")
+    assert token is not None, "check 3 (login) did not run first"
+    return {"Authorization": f"Bearer {token}"}
+
+
 def check_work_locations_list(t: SmokeTest) -> str:
-    status, _, raw = http_request("GET", t.api("/work-locations"))
+    """Requires authentication as of slice 4 — this was slice 1 code,
+    written before auth existed, and nothing went back to add the
+    dependency the other GETs use until now (see README).
+    """
+    status, _, raw = http_request("GET", t.api("/work-locations"), headers=_auth_headers(t))
     t.record_response("work_locations_list", raw)
     assert status == 200, f"expected 200, got {status}: {raw}"
     locations = json.loads(raw)
@@ -274,7 +304,7 @@ def check_work_locations_list(t: SmokeTest) -> str:
 
 def check_remote_null_fields(t: SmokeTest) -> None:
     remote = t.state.get("remote")
-    assert remote is not None, "check 3 did not produce a 'Remote' row"
+    assert remote is not None, "check 4 did not produce a 'Remote' row"
     assert remote.get("name") == "Remote"
     for field in ("address_line_1", "city", "state", "zip"):
         assert field in remote, f"'{field}' missing from response entirely, not just null"
@@ -283,29 +313,32 @@ def check_remote_null_fields(t: SmokeTest) -> None:
 
 def check_work_location_get_by_id(t: SmokeTest) -> None:
     remote = t.state.get("remote")
-    assert remote is not None, "check 3 did not produce a 'Remote' row"
-    status, _, raw = http_request("GET", t.api(f"/work-locations/{remote['id']}"))
+    assert remote is not None, "check 4 did not produce a 'Remote' row"
+    status, _, raw = http_request("GET", t.api(f"/work-locations/{remote['id']}"), headers=_auth_headers(t))
     t.record_response("work_location_get_by_id", raw)
     assert status == 200, f"expected 200, got {status}: {raw}"
 
 
 def check_work_location_410(t: SmokeTest) -> None:
-    status, headers, raw = http_request("GET", t.api("/work-locations/999999"))
+    status, headers, raw = http_request("GET", t.api("/work-locations/999999"), headers=_auth_headers(t))
     t.record_response("work_location_410", raw)
-    t.state["check6"] = {"status": status, "content_type": headers.get("content-type", ""), "raw": raw}
+    t.state["not_found_check"] = {"status": status, "content_type": headers.get("content-type", ""), "raw": raw}
     assert status == 410, f"expected 410, got {status}: {raw}"
     assert "application/json" in headers.get("content-type", ""), f"unexpected content-type: {headers}"
     assert "detail" in json.loads(raw), f"no 'detail' key in body: {raw}"
 
 
 def check_work_location_422(t: SmokeTest) -> None:
-    status, _, raw = http_request("GET", t.api("/work-locations/abc"))
+    status, _, raw = http_request("GET", t.api("/work-locations/abc"), headers=_auth_headers(t))
     t.record_response("work_location_422", raw)
     assert status == 422, f"expected 422, got {status}: {raw}"
 
 
 def check_expertise_list(t: SmokeTest) -> str:
-    status, _, raw = http_request("GET", t.api("/expertise"))
+    """Requires authentication as of slice 4 — same gap, same fix as
+    /work-locations above.
+    """
+    status, _, raw = http_request("GET", t.api("/expertise"), headers=_auth_headers(t))
     t.record_response("expertise_list", raw)
     assert status == 200, f"expected 200, got {status}: {raw}"
     rows = json.loads(raw)
@@ -313,13 +346,25 @@ def check_expertise_list(t: SmokeTest) -> str:
     return f"{len(rows)} row(s)"
 
 
+def check_work_locations_requires_authentication(t: SmokeTest) -> None:
+    """As of slice 4, this is no longer a public endpoint — a stranger
+    with the CloudFront URL can no longer curl it with no token. This
+    replaces the old "public endpoint ignores garbage auth header"
+    check, which tested the opposite (and now-obsolete) expectation;
+    /health takes over as the example of a genuinely public route.
+    """
+    status, _, raw = http_request("GET", t.api("/work-locations"))
+    t.record_response("work_locations_no_auth", raw)
+    assert status == 401, f"expected 401 with no Authorization header, got {status}: {raw}"
+
+
 def check_public_endpoint_ignores_garbage_auth_header(t: SmokeTest) -> None:
     """A public endpoint must not require or choke on an Authorization
-    header it has no use for — proving slice 2's auth machinery didn't
-    accidentally leak a global auth requirement onto pre-existing routes.
+    header it has no use for. /health is the example now — /work-locations
+    stopped being public in slice 4 (see check 10).
     """
     status, _, raw = http_request(
-        "GET", t.api("/work-locations"), headers={"Authorization": "Bearer garbage-not-a-real-token"}
+        "GET", t.api("/health"), headers={"Authorization": "Bearer garbage-not-a-real-token"}
     )
     t.record_response("public_with_garbage_auth", raw)
     assert status == 200, f"expected 200 even with a garbage auth header, got {status}: {raw}"
@@ -344,7 +389,7 @@ def check_login_wrong_password(t: SmokeTest) -> None:
 
 def check_login_unknown_email_identical(t: SmokeTest) -> None:
     wrong_password_body = t.state.get("wrong_password_body")
-    assert wrong_password_body is not None, "check 11 (wrong password) did not run first"
+    assert wrong_password_body is not None, "check 12 (wrong password) did not run first"
     status, _, raw = http_request(
         "POST", t.api("/login"), body={"email": "nobody@example.com", "password": "wrong-password"}
     )
@@ -375,7 +420,7 @@ def check_login_timing(t: SmokeTest) -> str:
     invocation, no Init Duration — it was really bcrypt, not a cold
     start). infra/ is off-limits (confirmed with the workshop), so the
     cost factor was reduced to 10 instead (see README and
-    auth_service._BCRYPT_ROUNDS) rather than asking for more memory. A
+    app.config.BCRYPT_ROUNDS) rather than asking for more memory. A
     fixed millisecond tolerance calibrated for one baseline/cost factor
     is meaningless at another. A genuine regression (dummy-hash path
     removed) shows up as the SAME order of
@@ -425,7 +470,7 @@ def check_me_malformed_headers(t: SmokeTest) -> str:
 
 def check_me_valid_token(t: SmokeTest) -> str:
     token = t.state.get("token")
-    assert token is not None, "check 10 (login) did not run first"
+    assert token is not None, "check 3 (login) did not run first"
     status, _, raw = http_request("GET", t.api("/me"), headers={"Authorization": f"Bearer {token}"})
     t.record_response("me_valid_token", raw)
     t.state["me_valid_status"] = status
@@ -438,18 +483,18 @@ def check_me_valid_token(t: SmokeTest) -> str:
 
 def check_proxy_header_regression(t: SmokeTest) -> None:
     """Explicitly labeled so it doesn't get deleted as "redundant with
-    check 17" — bin/proxy-server.js once silently dropped the
-    Authorization header entirely (see README), and check 17 succeeding
+    check 18" — bin/proxy-server.js once silently dropped the
+    Authorization header entirely (see README), and check 18 succeeding
     is the only thing that proves that regression hasn't come back.
     """
     status = t.state.get("me_valid_status")
-    assert status is not None, "check 17 (valid token) did not run first"
+    assert status is not None, "check 18 (valid token) did not run first"
     assert status == 200, "Authorization header did not reach the Lambda — the proxy-header bug may be back"
 
 
 def check_me_tampered_token(t: SmokeTest) -> None:
     token = t.state.get("token")
-    assert token is not None, "check 10 (login) did not run first"
+    assert token is not None, "check 3 (login) did not run first"
     tampered = tamper_token(token)
     status, _, raw = http_request("GET", t.api("/me"), headers={"Authorization": f"Bearer {tampered}"})
     t.record_response("me_tampered_token", raw)
@@ -479,14 +524,14 @@ def check_spa_root(t: SmokeTest) -> None:
 
 
 def check_410_survives_cloudfront(t: SmokeTest) -> None:
-    check6 = t.state.get("check6")
-    assert check6 is not None, "check 6 (410) did not run first"
-    assert check6["status"] == 410, f"CloudFront rewrote the status: got {check6['status']}"
-    assert "application/json" in check6["content_type"], (
-        f"CloudFront rewrote the content-type to {check6['content_type']!r} "
+    not_found_check = t.state.get("not_found_check")
+    assert not_found_check is not None, "check 7 (410) did not run first"
+    assert not_found_check["status"] == 410, f"CloudFront rewrote the status: got {not_found_check['status']}"
+    assert "application/json" in not_found_check["content_type"], (
+        f"CloudFront rewrote the content-type to {not_found_check['content_type']!r} "
         f"— this is exactly the custom_error_response rewrite the 410 choice exists to avoid"
     )
-    assert "detail" in json.loads(check6["raw"]), "body lost its 'detail' key in transit"
+    assert "detail" in json.loads(not_found_check["raw"]), "body lost its 'detail' key in transit"
 
 
 # ---------------------------------------------------------------------
@@ -507,37 +552,40 @@ def main() -> int:
     t.run("1. GET /health -> 200", lambda: check_health(t))
     t.run("2. path prefix, both shapes, against the raw Lambda", lambda: check_path_prefix_both_shapes(t))
 
-    print("\n-- Slice 1: public reads --")
-    t.run("3. GET /work-locations -> 200, includes Remote", lambda: check_work_locations_list(t))
-    t.run("4. Remote: name set, all 4 address fields null (present)", lambda: check_remote_null_fields(t))
-    t.run("5. GET /work-locations/{real id} -> 200", lambda: check_work_location_get_by_id(t))
-    t.run("6. GET /work-locations/999999 -> 410, JSON, real body", lambda: check_work_location_410(t))
-    t.run("7. GET /work-locations/abc -> 422", lambda: check_work_location_422(t))
-    t.run("8. GET /expertise -> 200, 4 rows", lambda: check_expertise_list(t))
-    t.run("9. Public endpoint ignores a garbage Authorization header", lambda: check_public_endpoint_ignores_garbage_auth_header(t))
+    print("\n-- Slice 2: auth (login moved up here - slice 1's reads now need a token) --")
+    t.run("3. POST /login correct credentials -> 200 + token", lambda: check_login_success(t))
 
-    print("\n-- Slice 2: auth --")
-    t.run("10. POST /login correct credentials -> 200 + token", lambda: check_login_success(t))
-    t.run("11. POST /login wrong password -> 401", lambda: check_login_wrong_password(t))
-    t.run("12. POST /login unknown email -> 401, body IDENTICAL to #11", lambda: check_login_unknown_email_identical(t))
-    t.run("13. POST /login deactivated account -> 401", lambda: check_login_deactivated(t))
-    t.run("14. TIMING: unknown-email vs wrong-password, asserted", lambda: check_login_timing(t))
-    t.run("15. GET /me no Authorization header -> 401", lambda: check_me_no_header(t))
-    t.run("16. GET /me malformed headers -> 401", lambda: check_me_malformed_headers(t))
-    t.run("17. GET /me valid token -> 200, correct identity", lambda: check_me_valid_token(t))
-    t.run("18. GET /me tampered token -> 401", lambda: check_me_tampered_token(t))
-    t.run("19. GET /me expired token -> 401", lambda: check_me_expired_token(t))
+    print("\n-- Slice 1: reads (require authentication as of slice 4) --")
+    t.run("4. GET /work-locations -> 200, includes Remote", lambda: check_work_locations_list(t))
+    t.run("5. Remote: name set, all 4 address fields null (present)", lambda: check_remote_null_fields(t))
+    t.run("6. GET /work-locations/{real id} -> 200", lambda: check_work_location_get_by_id(t))
+    t.run("7. GET /work-locations/999999 -> 410, JSON, real body", lambda: check_work_location_410(t))
+    t.run("8. GET /work-locations/abc -> 422", lambda: check_work_location_422(t))
+    t.run("9. GET /expertise -> 200, 4 rows", lambda: check_expertise_list(t))
+    t.run("10. GET /work-locations no Authorization header -> 401", lambda: check_work_locations_requires_authentication(t))
+    t.run("11. Public endpoint (/health) ignores a garbage Authorization header", lambda: check_public_endpoint_ignores_garbage_auth_header(t))
+
+    print("\n-- Slice 2: auth, continued --")
+    t.run("12. POST /login wrong password -> 401", lambda: check_login_wrong_password(t))
+    t.run("13. POST /login unknown email -> 401, body IDENTICAL to #12", lambda: check_login_unknown_email_identical(t))
+    t.run("14. POST /login deactivated account -> 401", lambda: check_login_deactivated(t))
+    t.run("15. TIMING: unknown-email vs wrong-password, asserted", lambda: check_login_timing(t))
+    t.run("16. GET /me no Authorization header -> 401", lambda: check_me_no_header(t))
+    t.run("17. GET /me malformed headers -> 401", lambda: check_me_malformed_headers(t))
+    t.run("18. GET /me valid token -> 200, correct identity", lambda: check_me_valid_token(t))
+    t.run("19. GET /me tampered token -> 401", lambda: check_me_tampered_token(t))
+    t.run("20. GET /me expired token -> 401", lambda: check_me_expired_token(t))
 
     print("\n-- Leakage --")
-    t.run("20. No password_hash / $2b$ / plaintext password in any response", lambda: check_no_leakage(t))
+    t.run("21. No password_hash / $2b$ / plaintext password in any response", lambda: check_no_leakage(t))
 
     print("\n-- Regression: bugs we already found --")
-    t.run("21. Authorization header reaches the Lambda (proxy-header bug)", lambda: check_proxy_header_regression(t))
+    t.run("22. Authorization header reaches the Lambda (proxy-header bug)", lambda: check_proxy_header_regression(t))
 
     if target == "aws":
         print("\n-- AWS only --")
-        t.run("22. SPA loads at root, returns HTML", lambda: check_spa_root(t))
-        t.run("23. 410 (check 6) survives CloudFront intact", lambda: check_410_survives_cloudfront(t))
+        t.run("23. SPA loads at root, returns HTML", lambda: check_spa_root(t))
+        t.run("24. 410 (check 7) survives CloudFront intact", lambda: check_410_survives_cloudfront(t))
 
     ok = t.summary()
     return 0 if ok else 1

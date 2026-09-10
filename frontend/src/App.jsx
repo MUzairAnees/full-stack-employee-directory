@@ -3,6 +3,7 @@ import { AppBar, Box, Button, CircularProgress, Toolbar, Typography } from '@mui
 import { getHealth } from './services/api';
 import WorkLocations from './pages/WorkLocations';
 import Departments from './pages/Departments';
+import Employees from './pages/Employees';
 import Login from './pages/Login';
 import { useCurrentUser } from './context/CurrentUserContext';
 
@@ -52,6 +53,10 @@ function App() {
           Departments
         </Typography>
         <Departments />
+        <Typography variant="h5" component="h1" sx={{ mt: 2 }}>
+          Employees
+        </Typography>
+        <Employees />
       </Box>
     </>
   );
