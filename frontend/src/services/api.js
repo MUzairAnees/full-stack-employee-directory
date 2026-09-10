@@ -340,3 +340,16 @@ export async function listSkills() {
   }
   return response.json();
 }
+
+/**
+ * Lists projects — the shared lookup list.
+ *
+ * @returns {Promise<Array<{id: number, name: string, description: string|null}>>}
+ */
+export async function listProjects() {
+  const response = await authFetch('/projects');
+  if (!response.ok) {
+    throw classifyError(response);
+  }
+  return response.json();
+}

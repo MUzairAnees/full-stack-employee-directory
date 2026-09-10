@@ -3,7 +3,7 @@ controller via require_role — nothing here branches on who's asking, so
 unlike employee_service there's no authorization split to encode.
 """
 
-from app.models.team import Team
+from app.models.team import Achievement, Team
 from app.repositories import team_repository as repo
 from app.schemas.team import TeamCreate, TeamUpdate
 
@@ -31,3 +31,7 @@ def update_team(team_id: int, body: TeamUpdate) -> Team:
 
 def delete_team(team_id: int) -> Team:
     return repo.soft_delete_team(team_id)
+
+
+def get_achievements(team_id: int, month: str | None) -> list[Achievement]:
+    return repo.get_team_achievements(team_id, month)

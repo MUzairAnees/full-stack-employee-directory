@@ -55,16 +55,18 @@ def hard_delete_employees(conn, employee_ids: list[int]) -> None:
     clause — RESTRICT by default), so an employee in this set who is
     another employee in this set's manager_id would block the DELETE.
     Cleared first, safe regardless of what order the ids were created
-    in or what pointed at what. Also clears any employee_skills rows for
-    these employees (slice 6) — same RESTRICT-by-default reasoning;
-    leaves the skills rows themselves alone (pair with hard_delete_skills
-    for those, when a test also created skill rows to clean up).
+    in or what pointed at what. Also clears any employee_skills/
+    employee_projects rows for these employees (slices 6-7) — same
+    RESTRICT-by-default reasoning; leaves the skill/project rows
+    themselves alone (pair with hard_delete_skills/hard_delete_projects
+    for those, when a test also created lookup rows to clean up).
     """
     if not employee_ids:
         return
     with conn.cursor() as cur:
         cur.execute("UPDATE employees SET manager_id = NULL WHERE manager_id = ANY(%s)", (employee_ids,))
         cur.execute("DELETE FROM employee_skills WHERE employee_id = ANY(%s)", (employee_ids,))
+        cur.execute("DELETE FROM employee_projects WHERE employee_id = ANY(%s)", (employee_ids,))
         cur.execute("DELETE FROM employees WHERE id = ANY(%s)", (employee_ids,))
 
 
@@ -80,6 +82,20 @@ def hard_delete_skills(conn, skill_ids: list[int]) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM employee_skills WHERE skill_id = ANY(%s)", (skill_ids,))
         cur.execute("DELETE FROM skills WHERE id = ANY(%s)", (skill_ids,))
+
+
+def hard_delete_projects(conn, project_ids: list[int]) -> None:
+    """Hard-deletes projects by id — test teardown only; there is no
+    user-facing delete for projects at all, attach/detach/complete only
+    ever touch the employee_projects join. Clears any employee_projects
+    rows referencing these projects first (projects.id has no ON DELETE
+    clause, RESTRICT by default).
+    """
+    if not project_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM employee_projects WHERE project_id = ANY(%s)", (project_ids,))
+        cur.execute("DELETE FROM projects WHERE id = ANY(%s)", (project_ids,))
 
 
 def make_function_url_event(raw_path: str) -> dict:

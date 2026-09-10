@@ -84,6 +84,7 @@ def list_employees(
     team_id: int | None = None,
     department_id: int | None = None,
     skill_id: int | None = None,
+    project_id: int | None = None,
     available: bool | None = None,
     include_inactive: bool = False,
 ) -> list[Employee]:
@@ -94,11 +95,12 @@ def list_employees(
 
     department_id filters through teams (a subquery, not stored on
     employees directly — see schema.sql's comment on why), same as the
-    department delete-guard. skill_id filters through employee_skills
-    the same way — deferred from slice 4, built in slice 6 alongside
-    skills itself; indexed on the skill_id side
-    (idx_employee_skills_skill_id — the composite primary key alone
-    doesn't cover it).
+    department delete-guard. skill_id/project_id filter through
+    employee_skills/employee_projects the same way — both deferred from
+    slice 4, built alongside their respective resources (skills in
+    slice 6, projects in slice 7); both indexed on the far side
+    (idx_employee_skills_skill_id, idx_employee_projects_project_id —
+    the composite primary keys alone don't cover either).
     """
     conditions: list[str] = []
     params: list = []
@@ -127,6 +129,9 @@ def list_employees(
     if skill_id is not None:
         conditions.append("id IN (SELECT employee_id FROM employee_skills WHERE skill_id = %s)")
         params.append(skill_id)
+    if project_id is not None:
+        conditions.append("id IN (SELECT employee_id FROM employee_projects WHERE project_id = %s)")
+        params.append(project_id)
     if available is not None:
         conditions.append("project_availability = %s")
         params.append(available)

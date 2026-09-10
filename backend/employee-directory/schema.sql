@@ -153,3 +153,12 @@ CREATE INDEX IF NOT EXISTS idx_employee_projects_completed_at ON employee_projec
 -- skills at all — nothing writes to it yet — so trivially clean), same
 -- discipline as every prior index in this file.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_name_lower ON skills (LOWER(name));
+
+-- Same reasoning and same discipline as idx_skills_name_lower: projects
+-- are ALSO get-or-create (via POST /employees/{id}/projects, attach by
+-- name) as well as explicit-create (POST /projects, which 409s on a
+-- LOWER(name) collision against either path). Without this, "Atlas" /
+-- "atlas" / "ATLAS" would be three rows. Checked local Postgres for
+-- existing case-duplicate project names before adding it (0 rows in
+-- projects at all, trivially clean).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_lower ON projects (LOWER(name));

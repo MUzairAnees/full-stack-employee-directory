@@ -399,6 +399,56 @@ later in Figma from a metaprompt derived from the finished backend +
 this README, so `/openapi.json` becomes literal input to that process,
 not just documentation for us.
 
+## Slice 7: projects
+
+### Two operations, not one endpoint with two moods
+
+`POST /employees/{id}/projects` is get-or-create by name (mirroring
+skills) and **never** sets `description` — attaching to an existing
+project must not let the joiner rewrite its description for everyone.
+`POST /projects` is a *separate*, explicit-create operation, open to any
+authenticated user, that 409s on a name collision (checked
+case-insensitively via `idx_projects_name_lower`, same relationship to
+the plain `UNIQUE(name)` as the skills/email lowercase indexes) rather
+than reusing the existing row. That distinction is load-bearing for
+`PUT /projects/{id}` being Admin-only: if `POST` instead merged into an
+existing row, anyone could route around the Admin gate by re-POSTing a
+new description under the same name. `name` is also editable via `PUT`,
+same collision check.
+
+No `is_active` on `projects`, and none is planned — projects have no
+lifecycle of their own here. State lives on
+`employee_projects.completed_at`: "this project is over" is already
+expressible as "everyone assigned has a completion date." Adding a
+lifecycle column would invent one and immediately demand new guards,
+for no capability this app actually needs.
+
+### Completion is self-reported and manager-correctable, not verified
+
+Self may set (and clear — reopen) their own `completed_at` via
+`PUT /employees/{id}/projects/{project_id}`, same as a manager can for
+their team, or Admin for anyone. Nobody's write is authoritative over
+anyone else's — if the question ever comes up, that's the honest answer
+for whether someone could inflate their own numbers: yes, the same way
+they could misreport any self-service field in this app, and a
+manager/Admin can correct it after the fact, not before.
+
+### `GET /teams/{id}/achievements?month=YYYY-MM`
+
+Completed projects (`completed_at IS NOT NULL` — an assignment with no
+completion date is in-progress, not an achievement) for a team, `month`
+optional (omitted = all-time, which is what answers "total done ever,"
+not just "what shipped this month"). Two attribution caveats stack, both
+following from there being no historical team-assignment record:
+
+- Credited to whoever is on the team **now**, not who was on it when the
+  project was completed.
+- Active employees only — someone who's since left takes their
+  completions out of their former team's total.
+
+Neither is fixable without a real assignment-history table, which is a
+bigger change than this slice's scope.
+
 ## Demo credentials (bootstrap accounts)
 
 `seed.sql` stores password hashes, not plaintext, so the plaintext has to

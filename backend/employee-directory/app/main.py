@@ -3,7 +3,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.controllers import auth, departments, employees, expertise, skills, teams, work_locations
+from app.controllers import auth, departments, employees, expertise, projects, skills, teams, work_locations
 from app.exceptions import DependentsExistError, DuplicateError, InvalidReferenceError, NotFoundError
 
 app = FastAPI(title="Employee Directory")
@@ -15,6 +15,7 @@ app.include_router(departments.router)
 app.include_router(employees.router)
 app.include_router(teams.router)
 app.include_router(skills.router)
+app.include_router(projects.router)
 
 
 @app.exception_handler(NotFoundError)

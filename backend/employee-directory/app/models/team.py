@@ -1,7 +1,7 @@
-"""Team row model."""
+"""Team row models."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass
@@ -18,3 +18,18 @@ class Team:
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass
+class Achievement:
+    """One completed project, attributed to whoever is CURRENTLY on the
+    team (see team_repository.get_team_achievements) — a row from
+    GET /teams/{id}/achievements, not a stored entity of its own.
+    """
+
+    employee_id: int
+    employee_first_name: str
+    employee_last_name: str
+    project_id: int
+    project_name: str
+    completed_at: date

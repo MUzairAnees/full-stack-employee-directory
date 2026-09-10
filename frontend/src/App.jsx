@@ -6,6 +6,7 @@ import Departments from './pages/Departments';
 import Employees from './pages/Employees';
 import Teams from './pages/Teams';
 import Skills from './pages/Skills';
+import Projects from './pages/Projects';
 import Login from './pages/Login';
 import { useCurrentUser } from './context/CurrentUserContext';
 
@@ -67,6 +68,10 @@ function App() {
           Skills
         </Typography>
         <Skills />
+        <Typography variant="h5" component="h1" sx={{ mt: 2 }}>
+          Projects
+        </Typography>
+        <Projects />
       </Box>
     </>
   );

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import current_user, require_role
 from app.models.role import Role
-from app.schemas.team import TeamCreate, TeamOut, TeamUpdate
+from app.schemas.team import AchievementOut, TeamCreate, TeamOut, TeamUpdate
 from app.services import team_service as service
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -56,3 +56,26 @@ def delete_team(team_id: int, _employee=Depends(require_role(Role.CEO))) -> Team
     manager remain — see team_repository.soft_delete_team.
     """
     return service.delete_team(team_id)
+
+
+@router.get(
+    "/{team_id}/achievements",
+    response_model=list[AchievementOut],
+    responses={
+        401: {"description": "Not authenticated."},
+        410: {"description": "No team with this id."},
+        422: {"description": "month is present but not in YYYY-MM form."},
+    },
+)
+def get_team_achievements(
+    team_id: int,
+    month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    _employee=Depends(current_user),
+) -> list[AchievementOut]:
+    """Completed projects (completed_at IS NOT NULL) for this team's
+    current active members. month ("YYYY-MM") narrows to that month;
+    omitted returns all-time completions — answers both "what shipped in
+    March" and "total done ever". See team_repository.get_team_achievements
+    for the attribution caveats (current membership only, active only).
+    """
+    return service.get_achievements(team_id, month)

@@ -14,12 +14,14 @@ docstrings on why those were promoted in this slice. The dependency runs
 one way only: employee_repository never imports team_repository.
 """
 
+from datetime import date
+
 import psycopg
 from psycopg.rows import class_row
 
 from app.exceptions import DependentsExistError, DuplicateError, InvalidReferenceError, NotFoundError
 from app.models.role import Role
-from app.models.team import Team
+from app.models.team import Achievement, Team
 from app.repositories.db import get_connection
 from app.repositories.department_repository import get_department
 from app.repositories.employee_repository import compute_manager_id, get_ceo_id, get_employee_by_id
@@ -317,3 +319,62 @@ def soft_delete_team(team_id: int) -> Team:
                 (ceo_id, team.manager_id),
             )
     return team
+
+
+def get_team_achievements(team_id: int, month: str | None = None) -> list[Achievement]:
+    """Completed projects for this team's CURRENT active members. month
+    ("YYYY-MM"), already validated at the controller (a FastAPI Query
+    pattern constraint, not re-checked here), narrows to that month;
+    omitted means all-time — that's what answers "total done ever," not
+    just "what shipped this month".
+
+    completed_at IS NOT NULL is explicit and load-bearing: an
+    employee_projects row with no completion date is in-progress work,
+    not an achievement — that's what "reopen by clearing completed_at"
+    (see project_repository.attach_project/project_service.update_completion)
+    means it stops counting as.
+
+    Indexing note, verified by name (not assumed from either a prior
+    claim or notes describing it differently): employee_projects has TWO
+    separate single-column indexes — idx_employee_projects_project_id
+    and idx_employee_projects_completed_at — NOT one composite index
+    covering both. The actual indexed path this query walks is
+    employees.team_id (idx_employees_team_id) to find the team's
+    members, then employee_projects via its primary key
+    (employee_id, project_id), whose leading column is employee_id.
+
+    Raises:
+        NotFoundError: no team has this id (410).
+    """
+    get_team(team_id)  # raises NotFoundError if missing
+
+    conditions = ["e.team_id = %s", "e.is_active", "ep.completed_at IS NOT NULL"]
+    params: list = [team_id]
+
+    if month is not None:
+        year, month_number = (int(part) for part in month.split("-"))
+        start = date(year, month_number, 1)
+        end = date(year + 1, 1, 1) if month_number == 12 else date(year, month_number + 1, 1)
+        conditions.append("ep.completed_at >= %s AND ep.completed_at < %s")
+        params.extend([start, end])
+
+    conn = get_connection()
+    with conn.cursor(row_factory=class_row(Achievement)) as cur:
+        cur.execute(
+            f"""
+            SELECT
+                e.id AS employee_id,
+                e.first_name AS employee_first_name,
+                e.last_name AS employee_last_name,
+                p.id AS project_id,
+                p.name AS project_name,
+                ep.completed_at
+            FROM employee_projects ep
+            JOIN employees e ON e.id = ep.employee_id
+            JOIN projects p ON p.id = ep.project_id
+            WHERE {" AND ".join(conditions)}
+            ORDER BY ep.completed_at, e.last_name, e.first_name
+            """,
+            params,
+        )
+        return cur.fetchall()

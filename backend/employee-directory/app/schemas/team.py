@@ -1,6 +1,6 @@
 """API schemas for teams."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -48,3 +48,24 @@ class TeamUpdate(BaseModel):
     name: NonEmptyName | None = None
     manager_id: int | None = None
     department_id: int | None = None
+
+
+class AchievementOut(BaseModel):
+    """One completed project, from GET /teams/{id}/achievements.
+
+    Attribution is CURRENT-team-membership-only — there's no historical
+    team-assignment record, so a completion is credited to whoever is on
+    the team now, not who was on it when the project was completed. Also
+    active-employees-only, stacking on that same caveat: someone who
+    left takes their completions out of their former team's total. Both
+    stated together in the backend README as one limitation, not two.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    employee_id: int
+    employee_first_name: str
+    employee_last_name: str
+    project_id: int
+    project_name: str
+    completed_at: date

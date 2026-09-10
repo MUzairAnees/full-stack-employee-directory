@@ -19,6 +19,7 @@ def list_employees(
     team_id: int | None = None,
     department_id: int | None = None,
     skill_id: int | None = None,
+    project_id: int | None = None,
     available: bool | None = None,
     include_inactive: bool = False,
 ) -> list[Employee]:
@@ -30,6 +31,7 @@ def list_employees(
         team_id=team_id,
         department_id=department_id,
         skill_id=skill_id,
+        project_id=project_id,
         available=available,
         include_inactive=include_inactive,
     )
